@@ -14,6 +14,18 @@ def get_player_stats(player_name):
     )
 
 
+def get_all_player_stats():
+    """Return stats for every player in the CSV."""
+    df = pd.read_csv("data/nba_players.csv")
+    lines = []
+    for _, row in df.iterrows():
+        lines.append(
+            f"{row['player']} ({row['team']}) - PPG: {row['ppg']}, "
+            f"RPG: {row['rpg']}, APG: {row['apg']}, Status: {row['status']}"
+        )
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     print(get_player_stats("Nikola Jokic"))
     print(get_player_stats("Anthony Edwards"))

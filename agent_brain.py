@@ -1,10 +1,11 @@
+import os
+import pandas as pd
+from datetime import datetime
 from typing import TypedDict
 from dotenv import load_dotenv
+from tavily import TavilyClient
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END, START
-
-from nba_tools import get_player_stats
-from simple_rag import get_top_insights
 
 load_dotenv()
 
@@ -13,11 +14,10 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 class GraphState(TypedDict):
-    user_query: str
-    player_stats: str
-    narrative_insights: list[str]
+    query: str
+    player_stats_table: str
+    team_narrative_bullets: str
     final_report: str
-    tools_needed: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -31,169 +31,160 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 # 3. Nodes
 # ---------------------------------------------------------------------------
 
-def reasoning_node(state: GraphState) -> dict:
-    """Analyze the user query and decide which tools are needed."""
-    query = state["user_query"]
+def data_specialist_node(state: GraphState) -> dict:
+    """
+    Node 1 — Data Specialist.
+    No LLM. Reads nba_players.csv directly, filters to teams mentioned in the
+    query, sorts by PPG descending, and formats a Markdown table.
+    """
+    query = state["query"].lower()
 
-    prompt = f"""You are an NBA analytics assistant. Given the user query below, decide which data sources are needed.
+    df = pd.read_csv("data/nba_players.csv")
+
+    # Filter to only the teams mentioned in the query
+    team_map = {
+        "denver":    "Denver Nuggets",
+        "minnesota": "Minnesota Timberwolves",
+    }
+    selected_teams = [full for keyword, full in team_map.items() if keyword in query]
+    if selected_teams:
+        df = df[df["team"].isin(selected_teams)]
+
+    df = df.sort_values("ppg", ascending=False).reset_index(drop=True)
+
+    sections = []
+    for team in df["team"].unique():
+        team_df = df[df["team"] == team]
+        rows = [
+            f"### {team}",
+            "| Player | PPG | RPG | APG |",
+            "|--------|-----|-----|-----|",
+        ]
+        for _, row in team_df.iterrows():
+            rows.append(f"| {row['player']} | {row['ppg']} | {row['rpg']} | {row['apg']} |")
+        sections.append("\n".join(rows))
+
+    table = "\n\n".join(sections)
+    print(f"[DataSpecialist]    Built {len(sections)} team tables ({len(df)} players, sorted by PPG)")
+    return {"player_stats_table": table}
+
+
+def context_extractor_node(state: GraphState) -> dict:
+    """
+    Node 2 — Context Extractor.
+    Uses Tavily live web search to fetch current standings, streaks, and H2H
+    data, then uses the LLM to distill results into factual bullet points.
+    """
+    query = state["query"]
+
+    # Build a targeted search query from the user's request
+    search_query = f"NBA {query} standings win loss streak head to head 2025-26 season"
+
+    tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    results = tavily.search(query=search_query, max_results=3)
+
+    raw_text = "\n\n".join(
+        f"Source: {r['url']}\n{r['content']}"
+        for r in results.get("results", [])
+    )
+
+    fetched_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    prompt = f"""You are a data analyst preparing inputs for a broadcast briefing.
 
 Query: {query}
 
-Available tools:
-- "stats"      : Fetch live player statistics (PPG, RPG, APG) — use when specific players are mentioned.
-- "narratives" : Fetch tactical/strategic insights via RAG — use when strategy, matchups, or team play are discussed.
+Live web search results (fetched {fetched_at}):
+{raw_text}
 
-Respond with a comma-separated list of required tool names only.
-Examples: "stats,narratives"  |  "stats"  |  "narratives"
-Output nothing else."""
-
-    response = llm.invoke(prompt)
-    raw = response.content.strip().lower()
-    tools_needed = [t.strip() for t in raw.split(",") if t.strip() in ("stats", "narratives")]
-
-    print(f"[Reasoning] Query     : {query}")
-    print(f"[Reasoning] Tools     : {tools_needed}")
-
-    return {"tools_needed": tools_needed}
-
-
-def fetch_stats_node(state: GraphState) -> dict:
-    """Fetch player statistics for every player mentioned in the query."""
-    query = state["user_query"]
-
-    # Use the LLM to extract player names from the query
-    prompt = f"""Extract NBA player names (in English) from this query.
-Query: {query}
-Output: comma-separated English player names only. Nothing else.
-Example: "Nikola Jokic,Anthony Edwards" """
+Task: Extract ONLY the factual points from the search results that are relevant to the query.
+Include ONLY: standings, win-loss records, winning/losing streaks, and head-to-head results.
+Do NOT include: tactical analysis, player tendencies, coaching strategy, or style-of-play notes.
+Format: one concise bullet point per fact. Output bullet points only — no headers, no extra commentary."""
 
     response = llm.invoke(prompt)
-    players = [p.strip() for p in response.content.strip().split(",") if p.strip()]
-
-    lines = []
-    for player in players:
-        result = get_player_stats(player)
-        lines.append(result)
-        print(f"[Stats] {result}")
-
-    return {"player_stats": "\n".join(lines)}
+    bullets = response.content.strip()
+    bullets_with_ts = f"[Data fetched: {fetched_at}]\n{bullets}"
+    print(f"[ContextExtractor]  Extracted {len(bullets.splitlines())} narrative bullets (live search, {fetched_at})")
+    return {"team_narrative_bullets": bullets_with_ts}
 
 
-def fetch_narratives_node(state: GraphState) -> dict:
-    """Retrieve relevant tactical insights from the vector store."""
-    query = state["user_query"]
+def report_composer_node(state: GraphState) -> dict:
+    """
+    Node 3 — Report Composer.
+    Receives player_stats_table and team_narrative_bullets from the state.
+    Writes exactly 2 paragraphs of professional pre-game briefing (facts only,
+    no tactical analysis), then appends the stats table unchanged.
+    """
+    bullets = state.get("team_narrative_bullets", "")
+    table   = state.get("player_stats_table", "")
 
-    prompt = f"""Convert this NBA query to a concise English search phrase for semantic retrieval.
-Query: {query}
-Output: English search phrase only."""
+    prompt = f"""You are a professional NBA broadcast writer. Produce a pre-game briefing in ENGLISH.
 
-    response = llm.invoke(prompt)
-    english_query = response.content.strip()
+Factual data — use ONLY what is listed below, no outside knowledge:
+{bullets}
 
-    insights = get_top_insights(english_query, k=3)
-    print(f"[Narratives] Search   : {english_query}")
-    print(f"[Narratives] Retrieved: {len(insights)} insights")
+Writing rules:
+- Write exactly 2 paragraphs — no headers between them.
+- Paragraph 1: Denver Nuggets. Cover their standing, record, and recent form.
+- Paragraph 2: Minnesota Timberwolves. Cover their standing, record, recent form,
+  and their head-to-head record against Denver this season.
+- Do NOT include tactical analysis, player descriptions, or style-of-play commentary.
+- Keep the tone professional and factual, suitable for a broadcast pre-game sheet.
 
-    return {"narrative_insights": insights}
+After the 2 paragraphs, output the following player stats tables exactly as shown — do not alter them, do not merge them, do not add or remove columns:
 
-
-def generator_node(state: GraphState) -> dict:
-    """Synthesize all gathered data into a final English broadcast report."""
-    query       = state.get("user_query", "")
-    stats       = state.get("player_stats", "")
-    narratives  = state.get("narrative_insights", [])
-
-    narratives_text = "\n".join(f"- {n}" for n in narratives) if narratives else "No additional insights."
-    stats_text      = stats if stats else "No stats found."
-
-    prompt = f"""You are a professional NBA broadcast writer. Write a comprehensive broadcast report in English based on the data below.
-
-User query:
-{query}
-
-Player statistics:
-{stats_text}
-
-Tactical insights:
-{narratives_text}
-
-Writing guidelines:
-- Write in clear, engaging English.
-- Open with a short summary of the matchup.
-- Analyze each player's strengths and their impact on the game.
-- Describe the tactical dynamics between the teams.
-- Close with concrete strategic recommendations for Denver."""
+{table}"""
 
     response = llm.invoke(prompt)
-    report = response.content
-    print(f"\n[Generator] Report ready ({len(report)} chars)")
-
+    report = response.content.strip()
+    print(f"[ReportComposer]    Final report ready ({len(report)} chars)")
     return {"final_report": report}
 
 
 # ---------------------------------------------------------------------------
-# 4. Routing
-# ---------------------------------------------------------------------------
-
-def route_after_reasoning(state: GraphState) -> list[str]:
-    """Fan-out to whichever tool nodes the reasoning step requested."""
-    tools = state.get("tools_needed", [])
-    destinations = [t for t in ("fetch_stats", "fetch_narratives") if t.replace("fetch_", "") in tools]
-    return destinations if destinations else ["generator"]
-
-
-# ---------------------------------------------------------------------------
-# 5. Build the graph
+# 4. Build the graph
 # ---------------------------------------------------------------------------
 
 def build_graph():
     workflow = StateGraph(GraphState)
 
-    workflow.add_node("reasoning",         reasoning_node)
-    workflow.add_node("fetch_stats",       fetch_stats_node)
-    workflow.add_node("fetch_narratives",  fetch_narratives_node)
-    workflow.add_node("generator",         generator_node)
+    workflow.add_node("data_specialist",   data_specialist_node)
+    workflow.add_node("context_extractor", context_extractor_node)
+    workflow.add_node("report_composer",   report_composer_node)
 
-    # START → reasoning
-    workflow.add_edge(START, "reasoning")
+    # Both specialist nodes run in parallel from START
+    workflow.add_edge(START, "data_specialist")
+    workflow.add_edge(START, "context_extractor")
 
-    # reasoning → (fetch_stats and/or fetch_narratives) or directly generator
-    workflow.add_conditional_edges(
-        "reasoning",
-        route_after_reasoning,
-        ["fetch_stats", "fetch_narratives", "generator"],
-    )
+    # LangGraph joins both branches before executing report_composer
+    workflow.add_edge("data_specialist",   "report_composer")
+    workflow.add_edge("context_extractor", "report_composer")
 
-    # Both tool nodes converge on generator (LangGraph joins when all branches complete)
-    workflow.add_edge("fetch_stats",      "generator")
-    workflow.add_edge("fetch_narratives", "generator")
-
-    # generator → END
-    workflow.add_edge("generator", END)
+    workflow.add_edge("report_composer", END)
 
     return workflow.compile()
 
 
 # ---------------------------------------------------------------------------
-# 6. Test
+# 5. Test
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     graph = build_graph()
 
-    test_query = "Analyze the matchup between Nikola Jokic and Anthony Edwards. Provide their key stats and explain the tactical approach Denver should take to win."
+    test_query = "Prepare a pre-game briefing for Denver Nuggets vs Minnesota Timberwolves"
 
     print("=" * 60)
-    print("NBA Broadcast Agent — LangGraph Brain")
+    print("HoopsPrep — Stable Trio Multi-Agent Briefing")
     print("=" * 60)
     print(f"Query: {test_query}\n")
 
-    initial_state = {
-        "user_query":         test_query,
-        "player_stats":       "",
-        "narrative_insights": [],
-        "final_report":       "",
-        "tools_needed":       [],
+    initial_state: GraphState = {
+        "query":                  test_query,
+        "player_stats_table":     "",
+        "team_narrative_bullets": "",
+        "final_report":           "",
     }
 
     result = graph.invoke(initial_state)
