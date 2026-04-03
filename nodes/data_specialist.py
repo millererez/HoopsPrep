@@ -258,6 +258,107 @@ def _fetch_recent_form(
     return lines
 
 
+def _analyze_form(form_lines: list[str], team_name: str) -> str:
+    """
+    Pre-analyze recent form lines and return a structured summary for the composer.
+    Covers: dominant scorer, their point range, win/loss arc.
+    Format: bullet points the LLM must use verbatim as the basis for its narrative.
+    """
+    import re
+    from collections import Counter
+
+    # Parse each line: "Mon DD vs OPP (W/L score-score): Player N pts"
+    wins = losses = 0
+    scorer_counts: Counter = Counter()
+    scorer_pts: dict[str, list[int]] = {}
+    scorer_peak_opp: dict[str, str] = {}   # name -> opponent for their peak game
+    scorer_opps: dict[str, list[str]] = {}  # name -> list of opponents in games they led
+    recent_results = []
+
+    for line in form_lines:
+        opp_m    = re.search(r'vs (\w+)', line)
+        result_m = re.search(r'\((W|L)\s+\d+-\d+\)', line)
+        scorer_m = re.search(r':\s+(.+?)\s+(\d+)\s+pts', line)
+        opp = opp_m.group(1) if opp_m else ""
+        if result_m:
+            if result_m.group(1) == "W":
+                wins += 1
+                recent_results.append("W")
+            else:
+                losses += 1
+                recent_results.append("L")
+        if scorer_m:
+            name = scorer_m.group(1)
+            pts  = int(scorer_m.group(2))
+            scorer_counts[name] += 1
+            scorer_opps.setdefault(name, []).append(opp)
+            if pts > max(scorer_pts.get(name, [0])):
+                scorer_peak_opp[name] = opp
+            scorer_pts.setdefault(name, []).append(pts)
+
+    total = len(form_lines)
+    bullets = []
+
+    # Win/loss record
+    bullets.append(f"  • Record in last {total} games: {wins}-{losses}")
+
+    # Win/loss arc — pre-written phrase for LLM to incorporate
+    if recent_results and total >= 6:
+        first_half  = recent_results[:total//2]
+        second_half = recent_results[total//2:]
+        first_w  = first_half.count("W")
+        second_w = second_half.count("W")
+        first_l  = len(first_half) - first_w
+        second_l = len(second_half) - second_w
+        if second_w - first_w >= 2 and second_w >= len(second_half) // 2 + 1:
+            bullets.append(
+                f"  • SURGE ARC — incorporate this: '{team_name} have found their footing, "
+                f"winning {second_w} of their last {len(second_half)} after going {first_w}-{first_l} to open this stretch.'"
+            )
+        elif first_w - second_w >= 2:
+            bullets.append(
+                f"  • COLLAPSE ARC — incorporate this: '{team_name} have fallen off sharply, "
+                f"dropping {second_l} of their last {len(second_half)} after going {first_w}-{first_l} to start this stretch.'"
+            )
+
+    # Dominant scorer — directive only, no game counts
+    if scorer_counts:
+        top_name, top_count = scorer_counts.most_common(1)[0]
+        pts_list = scorer_pts[top_name]
+        pts_min, pts_max = min(pts_list), max(pts_list)
+        opps_str = " and ".join(scorer_opps.get(top_name, []))
+        if top_count >= round(total * 0.6):
+            bullets.append(
+                f"  • Offensive engine: {top_name} — led team scoring against {opps_str}, "
+                f"posting {pts_min}–{pts_max} pts in those games. "
+                f"Describe as the team's go-to scorer. Do NOT say 'over the last N games'."
+            )
+        elif top_count >= round(total * 0.4):
+            bullets.append(
+                f"  • Go-to scorer: {top_name} — led team scoring against {opps_str}, "
+                f"posting {pts_min}–{pts_max} pts in those games. "
+                f"Describe as the primary offensive option. Do NOT say 'over the last N games'."
+            )
+        else:
+            bullets.append(
+                f"  • Spread offense: no consistent individual scorer in the last {total} games. "
+                f"Describe as a collective effort with no single go-to option."
+            )
+
+        # Notable single-game peaks — skip if player already named as engine/go-to
+        # (their peak opponent is already embedded in that bullet)
+        all_peaks = [(name, max(pts)) for name, pts in scorer_pts.items() if max(pts) >= 30]
+        all_peaks.sort(key=lambda x: -x[1])
+        for name, peak in all_peaks[:2]:
+            if name == top_name:
+                continue  # already covered in the offensive engine / go-to bullet
+            opp = scorer_peak_opp.get(name, "")
+            vs_str = f" against {opp}" if opp else ""
+            bullets.append(f"  • Notable performance: {name} scored {peak} pts{vs_str}")
+
+    return "\n".join(bullets)
+
+
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
@@ -353,9 +454,16 @@ def data_specialist_node(state: GraphState) -> dict:
             if p["team_id"] == espn_id and p["name"] not in out_names
         ]
 
+        out_count    = len(out_names)
+        active_count = len(roster)
+        # Only flag in header when genuinely short-handed (≤8 active)
+        availability = (
+            f" | Active roster: {active_count} players ({out_count} OUT)"
+            if active_count <= 8 else ""
+        )
         rows = [
             f"### {full_name}",
-            f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}",
+            f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}{availability}",
             f"Team Stats: {ppg_str} | {def_str}",
             "| Player | MIN | PPG | FG% | 3P% | FT% | RPG | APG | STL | BLK | TOV |",
             "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
@@ -399,18 +507,22 @@ def data_specialist_node(state: GraphState) -> dict:
         out_names = out_names_by_team.get(espn_id, set())
         active_names = {p["name"] for p in all_players if p["team_id"] == espn_id}
         try:
-            form_lines = _fetch_recent_form(espn_id, full_name, n_games=10)
-            # Keep only games where top scorer is active (in stats table) and not OUT
+            form_lines = _fetch_recent_form(espn_id, full_name, n_games=5)
+            # Keep only games where top scorer is active and not OUT
             form_lines = [
                 l for l in form_lines
                 if any(name in l for name in active_names)
                 and not any(out_name in l for out_name in out_names)
             ]
             if form_lines:
-                lines = "\n".join(f"  • {l}" for l in form_lines)
-                form_parts.append(f"### {full_name} Recent Form (last 10 games)\n{lines}")
                 for l in form_lines:
                     print(f"  • {l}")
+                # ── Pre-analyze form for the composer ──────────────────────
+                summary = _analyze_form(form_lines, full_name)
+                form_parts.append(
+                    f"### {full_name} Recent Form — ANALYSIS ONLY (do NOT use raw game lines)\n"
+                    f"{summary}"
+                )
             else:
                 form_parts.append(f"### {full_name} Recent Form\n  No recent games found.")
         except Exception as exc:

@@ -42,7 +42,7 @@ def build_graph():
 if __name__ == "__main__":
     graph = build_graph()
 
-    test_query = "Prepare a pre-game briefing for Memphis Grizzlies vs Toronto Raptors"
+    test_query = "Prepare a pre-game briefing for Philadelphia 76ers vs Minnesota Timberwolves"
 
     print("=" * 60)
     print("HoopsPrep — ESPN API Stats + Tavily Narrative Briefing")
