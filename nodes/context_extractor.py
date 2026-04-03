@@ -62,9 +62,22 @@ def context_extractor_node(state: GraphState) -> dict:
         include_domains=["espn.com", "nba.com", "statmuse.com", "basketball-reference.com", "cbssports.com", "rotowire.com"],
     )
 
-    # Search 1 — Today's official injury report only (days=1 cuts off stale articles at API level)
-    q1 = f"{away_nick} {home_nick} official injury report today {today_iso}"
-    r1 = tavily.search(query=q1, **search_kwargs, days=1)
+    # Search 1a — ESPN/RotoWire HTML injury pages (parse well, today only)
+    q1a = f"{away_nick} {home_nick} injury report OUT questionable {today_iso}"
+    r1a = tavily.search(query=q1a, max_results=4,
+                        include_domains=["espn.com", "rotowire.com"], days=1)
+    # Search 1b — broader fallback (CBS, NBA)
+    q1b = f"{away_nick} {home_nick} injury OUT today {today_iso}"
+    r1b = tavily.search(query=q1b, max_results=3,
+                        include_domains=["cbssports.com", "nba.com"], days=1)
+    # Merge, deduplicate by URL
+    seen_urls: set[str] = set()
+    merged: list[dict] = []
+    for r in r1a.get("results", []) + r1b.get("results", []):
+        if r["url"] not in seen_urls:
+            seen_urls.add(r["url"])
+            merged.append(r)
+    r1 = {"results": merged}
 
     # Search 2 — Standout player recent form (star players, last 5 games)
     q2 = (

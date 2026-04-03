@@ -177,6 +177,87 @@ def _fetch_h2h_games(
     return "\n".join(lines)
 
 
+def _fetch_injuries(team_id: str, team_name: str) -> list[str]:
+    """
+    Fetch current injury list for a team from ESPN roster API.
+    Returns list of strings: "PlayerName — STATUS"
+    Only includes players with an active injury entry.
+    """
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
+    data = _espn_fetch(url)
+    results = []
+    for athlete in data.get("athletes", []):
+        injuries = athlete.get("injuries", [])
+        if not injuries:
+            continue
+        # Use the most recent injury entry
+        latest = max(injuries, key=lambda i: i.get("date", ""))
+        status = latest.get("status", "")
+        if status:
+            results.append(f"{athlete['displayName']} — {status}")
+    return results
+
+
+def _fetch_recent_form(
+    team_id: str, team_name: str, n_games: int = 3
+) -> list[str]:
+    """
+    Fetch the top scorer from each of the last n completed games for a team.
+    Uses ESPN schedule + game summary APIs.
+    Returns list of strings: "Date vs Opponent: PlayerName scored X pts (W/L score)"
+    """
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/schedule?season={ESPN_SEASON_YEAR}"
+    data = _espn_fetch(url)
+
+    completed = [
+        e for e in data.get("events", [])
+        if e["competitions"][0]["status"]["type"]["completed"]
+    ]
+    recent = completed[-n_games:]
+
+    lines = []
+    for event in recent:
+        comp    = event["competitions"][0]
+        game_id = comp["id"]
+        utc_dt  = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
+        date_str = utc_dt.astimezone(EST).strftime("%b %d")
+
+        # Determine opponent and result
+        team_score = opp_score = opp_name = ""
+        result = ""
+        for c in comp["competitors"]:
+            if c["team"]["id"] == team_id:
+                team_score = int(float(c["score"]["displayValue"]))
+                result = "W" if c.get("winner") else "L"
+            else:
+                opp_score = int(float(c["score"]["displayValue"]))
+                opp_name  = c["team"]["abbreviation"]
+
+        # Fetch top scorer from game summary
+        try:
+            summary = _espn_fetch(
+                f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={game_id}"
+            )
+            top_scorer = top_pts = None
+            for team_leaders in summary.get("leaders", []):
+                if team_leaders["team"]["id"] == team_id:
+                    for cat in team_leaders.get("leaders", []):
+                        if cat.get("displayName") == "Points":
+                            leader = cat["leaders"][0]
+                            top_scorer = leader["athlete"]["displayName"]
+                            top_pts    = leader["displayValue"]
+                            break
+        except Exception:
+            top_scorer = top_pts = None
+
+        scorer_str = f"{top_scorer} {top_pts} pts" if top_scorer else "scorer unavailable"
+        lines.append(
+            f"{date_str} vs {opp_name} ({result} {team_score}-{opp_score}): {scorer_str}"
+        )
+
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
@@ -215,7 +296,39 @@ def data_specialist_node(state: GraphState) -> dict:
         print(f"[DataSpecialist]    Player stats failed: {exc}")
         all_players = []
 
-    # ── Build per-team stats sections ──────────────────────────────────────
+    # ── Fetch injuries first (needed to filter OUT players from roster) ───────
+    injuries_by_team: dict[str, list[str]] = {}
+    out_names_by_team: dict[str, set[str]] = {}
+    injury_parts = []
+    for full_name, _, espn_id in teams:
+        print(f"[DataSpecialist]    Fetching injuries: {full_name} ...")
+        try:
+            injured = _fetch_injuries(espn_id, full_name)
+            injuries_by_team[espn_id] = injured
+            # Collect names of OUT players (not Day-To-Day) for roster filtering
+            out_names_by_team[espn_id] = {
+                entry.split(" — ")[0]
+                for entry in injured
+                if "Out" in entry and "Day-To-Day" not in entry
+            }
+            if injured:
+                lines = "\n".join(f"  • {p}" for p in injured)
+                injury_parts.append(f"### {full_name}\n{lines}")
+                print(f"[DataSpecialist]    {full_name}: {len(injured)} injured player(s)")
+                for p in injured:
+                    print(f"  • {p}")
+            else:
+                injury_parts.append(f"### {full_name}\n  No injuries reported.")
+                print(f"[DataSpecialist]    {full_name}: No injuries reported.")
+        except Exception as exc:
+            print(f"[DataSpecialist]    Injuries fetch failed for {full_name}: {exc}")
+            injuries_by_team[espn_id] = []
+            out_names_by_team[espn_id] = set()
+            injury_parts.append(f"### {full_name}\n  Data unavailable.")
+
+    injury_summary = "\n\n".join(injury_parts)
+
+    # ── Build per-team stats sections (OUT players excluded) ───────────────
     sections = []
     for full_name, nickname, espn_id in teams:
         info    = standings.get(espn_id, {})
@@ -234,7 +347,11 @@ def data_specialist_node(state: GraphState) -> dict:
         def_str  = f"{opp_ppg:.1f} Opp PPG ({ordinal(def_r)} in NBA)" if opp_ppg else "Def N/A"
         seed_str = f"#{seed} {conf.replace(' Conference','')}" if seed != "?" else "N/A"
 
-        roster = [p for p in all_players if p["team_id"] == espn_id]
+        out_names = out_names_by_team.get(espn_id, set())
+        roster = [
+            p for p in all_players
+            if p["team_id"] == espn_id and p["name"] not in out_names
+        ]
 
         rows = [
             f"### {full_name}",
@@ -256,7 +373,7 @@ def data_specialist_node(state: GraphState) -> dict:
         sections.append("\n".join(rows))
         print(
             f"[DataSpecialist]    {full_name}: W{wins}/L{losses} | {seed_str} | "
-            f"Streak:{streak} | L10:{l10} | {ppg_str} | {def_str} | {len(roster)} players"
+            f"Streak:{streak} | L10:{l10} | {ppg_str} | {def_str} | {len(roster)} active players"
         )
 
     # ── Fetch H2H via ESPN schedule API ────────────────────────────────────
@@ -275,7 +392,36 @@ def data_specialist_node(state: GraphState) -> dict:
             print(f"[DataSpecialist]    H2H fetch failed: {exc}")
             h2h_text = "H2H data unavailable."
 
+    # ── Fetch recent form (last 10 games top scorer, OUT players excluded) ──
+    form_parts = []
+    for full_name, _, espn_id in teams:
+        print(f"[DataSpecialist]    Fetching recent form: {full_name} ...")
+        out_names = out_names_by_team.get(espn_id, set())
+        active_names = {p["name"] for p in all_players if p["team_id"] == espn_id}
+        try:
+            form_lines = _fetch_recent_form(espn_id, full_name, n_games=10)
+            # Keep only games where top scorer is active (in stats table) and not OUT
+            form_lines = [
+                l for l in form_lines
+                if any(name in l for name in active_names)
+                and not any(out_name in l for out_name in out_names)
+            ]
+            if form_lines:
+                lines = "\n".join(f"  • {l}" for l in form_lines)
+                form_parts.append(f"### {full_name} Recent Form (last 10 games)\n{lines}")
+                for l in form_lines:
+                    print(f"  • {l}")
+            else:
+                form_parts.append(f"### {full_name} Recent Form\n  No recent games found.")
+        except Exception as exc:
+            print(f"[DataSpecialist]    Recent form fetch failed for {full_name}: {exc}")
+            form_parts.append(f"### {full_name} Recent Form\n  Data unavailable.")
+
+    recent_form = "\n\n".join(form_parts)
+
     return {
         "player_stats_table": "\n\n".join(sections),
         "h2h_summary":        h2h_text,
+        "injury_summary":     injury_summary,
+        "recent_form":        recent_form,
     }

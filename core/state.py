@@ -24,7 +24,9 @@ class GraphState(TypedDict):
     query: str
     player_stats_table: str      # ESPN API: W/L, seed, form, player stats
     h2h_summary: str             # ESPN API: completed H2H games with scores + venue
-    team_narrative_bullets: str  # Tavily: injuries + standout player trend
+    injury_summary: str          # ESPN API: current injury list per team
+    recent_form: str             # ESPN API: top scorer from each of last 3 games per team
+    team_narrative_bullets: str  # Tavily: (reserved for future use)
     final_report: str
 
 # ---------------------------------------------------------------------------

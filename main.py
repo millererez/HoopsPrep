@@ -42,7 +42,7 @@ def build_graph():
 if __name__ == "__main__":
     graph = build_graph()
 
-    test_query = "Prepare a pre-game briefing for Houston Rockets vs Utah Jazz"
+    test_query = "Prepare a pre-game briefing for Memphis Grizzlies vs Toronto Raptors"
 
     print("=" * 60)
     print("HoopsPrep — ESPN API Stats + Tavily Narrative Briefing")
@@ -53,6 +53,8 @@ if __name__ == "__main__":
         "query":                  test_query,
         "player_stats_table":     "",
         "h2h_summary":            "",
+        "injury_summary":         "",
+        "recent_form":            "",
         "team_narrative_bullets": "",
         "final_report":           "",
     }
