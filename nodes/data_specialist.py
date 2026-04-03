@@ -73,31 +73,40 @@ def _build_standings_lookup() -> dict[str, dict]:
 def _build_player_lookup() -> list[dict]:
     """
     Fetch league-wide per-game stats (sorted by PPG descending).
-    ESPN JSON layout (verified):
+    ESPN JSON layout (verified against live API):
       categories[0] = general   → totals[1]  = MIN,  totals[11] = RPG
       categories[1] = offensive → totals[0]  = PPG,  totals[3]  = FG%,
-                                  totals[7]  = APG
+                                  totals[6]  = 3P%,  totals[7]  = APG,
+                                  totals[9]  = FT%,  totals[11] = TOV
+      categories[2] = defensive → totals[0]  = STL,  totals[1]  = BLK
     """
     data = _espn_fetch(_ESPN_STATS_URL)
     players = []
     for a in data.get("athletes", []):
         athlete = a.get("athlete", {})
         cats    = a.get("categories", [])
-        if len(cats) < 2:
+        if len(cats) < 3:
             continue
         try:
-            ppg    = cats[1]["totals"][0]
-            fg_pct = cats[1]["totals"][3]
-            apg    = cats[1]["totals"][7]
             mins   = cats[0]["totals"][1]
             rpg    = cats[0]["totals"][11]
+            ppg    = cats[1]["totals"][0]
+            fg_pct = cats[1]["totals"][3]
+            tpp    = cats[1]["totals"][6]
+            apg    = cats[1]["totals"][7]
+            ft_pct = cats[1]["totals"][9]
+            tov    = cats[1]["totals"][11]
+            stl    = cats[2]["totals"][0]
+            blk    = cats[2]["totals"][1]
         except (IndexError, KeyError):
             continue
         players.append({
             "name":    athlete.get("displayName", "Unknown"),
             "team_id": athlete.get("teamId", ""),
-            "ppg": ppg, "fg_pct": fg_pct,
-            "apg": apg, "mins":   mins, "rpg": rpg,
+            "mins": mins, "ppg": ppg, "fg_pct": fg_pct,
+            "tpp": tpp, "ft_pct": ft_pct,
+            "rpg": rpg, "apg": apg,
+            "stl": stl, "blk": blk, "tov": tov,
         })
     return players
 
@@ -183,6 +192,8 @@ def data_specialist_node(state: GraphState) -> dict:
     """
     query = state["query"]
     teams = extract_teams(query)
+    print(f"[DataSpecialist]    Extracted teams: {[t[0] for t in teams]}")
+
 
     if not teams:
         print("[DataSpecialist]    Could not identify any NBA teams in query.")
@@ -223,20 +234,21 @@ def data_specialist_node(state: GraphState) -> dict:
         def_str  = f"{opp_ppg:.1f} Opp PPG ({ordinal(def_r)} in NBA)" if opp_ppg else "Def N/A"
         seed_str = f"#{seed} {conf.replace(' Conference','')}" if seed != "?" else "N/A"
 
-        top5 = [p for p in all_players if p["team_id"] == espn_id][:5]
+        roster = [p for p in all_players if p["team_id"] == espn_id]
 
         rows = [
             f"### {full_name}",
             f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}",
             f"Team Stats: {ppg_str} | {def_str}",
-            "| Player | MIN | PPG | FG% | RPG | APG |",
-            "|--------|-----|-----|-----|-----|-----|",
+            "| Player | MIN | PPG | FG% | 3P% | FT% | RPG | APG | STL | BLK | TOV |",
+            "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
         ]
-        if top5:
-            for p in top5:
+        if roster:
+            for p in roster:
                 rows.append(
-                    f"| {p['name']} | {p['mins']} | {p['ppg']} "
-                    f"| {p['fg_pct']} | {p['rpg']} | {p['apg']} |"
+                    f"| {p['name']} | {p['mins']} | {p['ppg']} | {p['fg_pct']} "
+                    f"| {p['tpp']} | {p['ft_pct']} | {p['rpg']} | {p['apg']} "
+                    f"| {p['stl']} | {p['blk']} | {p['tov']} |"
                 )
         else:
             rows.append("| Stats unavailable | — | — | — | — | — |")
@@ -244,7 +256,7 @@ def data_specialist_node(state: GraphState) -> dict:
         sections.append("\n".join(rows))
         print(
             f"[DataSpecialist]    {full_name}: W{wins}/L{losses} | {seed_str} | "
-            f"Streak:{streak} | L10:{l10} | {ppg_str} | {def_str} | {len(top5)} players"
+            f"Streak:{streak} | L10:{l10} | {ppg_str} | {def_str} | {len(roster)} players"
         )
 
     # ── Fetch H2H via ESPN schedule API ────────────────────────────────────

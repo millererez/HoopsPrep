@@ -59,7 +59,7 @@ def context_extractor_node(state: GraphState) -> dict:
     tavily = _tavily()
     search_kwargs = dict(
         max_results=4,
-        include_domains=["espn.com", "nba.com", "statmuse.com", "basketball-reference.com"],
+        include_domains=["espn.com", "nba.com", "statmuse.com", "basketball-reference.com", "cbssports.com", "rotowire.com"],
     )
 
     # Search 1 — Today's official injury report only (days=1 cuts off stale articles at API level)
@@ -111,11 +111,10 @@ If the article is MORE THAN 1 DAY OLD (published before {today_iso} minus 1 day)
 DISCARD it entirely — do not report any injury from that article.
 Injury status changes game-to-game; a week-old report is meaningless and dangerous.
 
-For each confirmed injured or absent player on either team (from non-stale sources only):
-  team name, player name, status (OUT / DOUBTFUL / QUESTIONABLE), and the specific injury.
-Skip vague "day-to-day" entries that do not name a specific injury.
-One bullet per player. Each bullet ends with [Source: <url>].
-If none confirmed from recent sources: "No confirmed injury data found."
+For each confirmed injured or absent player, output EXACTLY this format:
+[TEAM: {away_full}] PlayerName — STATUS — injury
+[TEAM: {home_full}] PlayerName — STATUS — injury
+If no injury for a team: [TEAM: {away_full}] No confirmed injury data found.
 
 ─── ELEMENT B — STANDOUT PLAYER RECENT TREND ───
 Identify ONE player per team with a notable, INTERESTING recent trend over the last 3-5 games.
@@ -143,10 +142,15 @@ today's date ({today_iso}). If the article containing the standout stat is MORE 
 "No recent standout data (source too old)" instead. We only want narratives that
 reflect the player's form in the last 48 hours.
 
-If nothing notable is confirmed for a team: "No standout trend confirmed for [team]."
-One entry per team (quote + extracted fact). Each entry ends with [Source: <url>].
+For each team, output EXACTLY this format (including the [TEAM: ...] tag):
+[TEAM: {away_full}] Quoted sentence: '...' | Extracted fact: ...  [Source: <url>]
+[TEAM: {home_full}] Quoted sentence: '...' | Extracted fact: ...  [Source: <url>]
+
+If nothing notable for a team: [TEAM: {away_full}] No standout trend confirmed.
+If source is stale:            [TEAM: {away_full}] No recent standout data (source too old).
 
 ABSOLUTE RULES:
+- Every entry MUST have a [TEAM: exact_team_name] prefix. Never omit it.
 - Every entry MUST end with [Source: <url>] from the results. Never invent a URL.
 - Only quote sentences that actually appear verbatim in the search result text above."""
 

@@ -77,18 +77,20 @@ def ordinal(n: int) -> str:
 
 
 def extract_teams(query: str) -> list[tuple[str, str, str]]:
-    """
-    Return up to 2 (full_name, nickname, espn_id) tuples whose name or
-    nickname appears in the query string.
-    """
+    import re
     q = query.lower()
     found: list[tuple[str, str, str]] = []
     for full, (nick, eid) in ESPN_TEAMS.items():
-        if full.lower() in q or nick.lower() in q:
+        full_pat = re.escape(full.lower())
+        nick_pat = re.escape(nick.lower())
+        if re.search(rf"\b{full_pat}\b", q) or re.search(rf"\b{nick_pat}\b", q):
             found.append((full, nick, eid))
-        if len(found) == 2:
-            break
-    return found
+    # Sort by first appearance in query to preserve mention order
+    found.sort(key=lambda t: (
+        re.search(rf"\b{re.escape(t[1].lower())}\b", q) or
+        re.search(rf"\b{re.escape(t[0].lower())}\b", q)
+    ).start())
+    return found[:2]
 
 
 def parse_home_away(
@@ -111,7 +113,8 @@ def parse_home_away(
             home = (full, nick, eid)
             away = t2 if home == t1 else t1
             return away, home
-    return t1, t2   # default: first = away, second = home
+    # "A vs B" → A is home; default fallback also treats first as home
+    return t2, t1   # away=t2, home=t1
 
 
 def extract_roster_names(table: str) -> list[str]:
