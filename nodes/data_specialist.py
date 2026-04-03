@@ -8,7 +8,7 @@ Fetches standings, player stats, and H2H game history.
 import requests
 from datetime import datetime
 
-from core.state import GraphState, ESPN_SEASON_YEAR, EST, ESPN_TEAMS, extract_teams, ordinal
+from core.state import GraphState, ESPN_SEASON_YEAR, EST, ESPN_TEAMS, extract_teams, parse_home_away, ordinal
 
 # ---------------------------------------------------------------------------
 # ESPN API endpoints
@@ -198,6 +198,23 @@ def _fetch_injuries(team_id: str, team_name: str) -> list[str]:
     return results
 
 
+def _fetch_full_active_roster(team_id: str, injured_names: set[str]) -> list[str]:
+    """
+    Fetch all active (non-injured) players from the ESPN roster endpoint.
+    Used when the qualified stats table is very short (≤6 players) to surface
+    G League call-ups and 10-day contract players who have no qualifying stats.
+    Returns a list of display names not already in the stats table.
+    """
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
+    data = _espn_fetch(url)
+    active = []
+    for athlete in data.get("athletes", []):
+        name = athlete.get("displayName", "")
+        if name and name not in injured_names:
+            active.append(name)
+    return active
+
+
 def _fetch_recent_form(
     team_id: str, team_name: str, n_games: int = 3
 ) -> list[str]:
@@ -258,7 +275,12 @@ def _fetch_recent_form(
     return lines
 
 
-def _analyze_form(form_lines: list[str], team_name: str) -> str:
+def _analyze_form(
+    form_lines: list[str],
+    team_name: str,
+    season_star: tuple[str, float] | None = None,
+    season_ppg_lookup: dict[str, float] | None = None,
+) -> str:
     """
     Pre-analyze recent form lines and return a structured summary for the composer.
     Covers: dominant scorer, their point range, win/loss arc.
@@ -356,6 +378,38 @@ def _analyze_form(form_lines: list[str], team_name: str) -> str:
             vs_str = f" against {opp}" if opp else ""
             bullets.append(f"  • Notable performance: {name} scored {peak} pts{vs_str}")
 
+    # ── Season-star override ──────────────────────────────────────────────────
+    # If the season PPG leader differs from the form-derived scorer and has a
+    # meaningful PPG gap (≥5 PPG), they are the true offensive engine regardless
+    # of who happened to lead a few recent games.
+    if season_star and scorer_counts:
+        star_name, star_ppg = season_star
+        form_leader, _ = scorer_counts.most_common(1)[0]
+        form_leader_season_ppg = (season_ppg_lookup or {}).get(form_leader, 0.0)
+        if star_name != form_leader and star_ppg - form_leader_season_ppg >= 5:
+            # Remove the form-derived engine/go-to bullet
+            bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
+            star_pts = scorer_pts.get(star_name, [])
+            if star_pts:
+                opps_str = " and ".join(scorer_opps.get(star_name, []))
+                pts_min, pts_max = min(star_pts), max(star_pts)
+                pts_clause = f"posting {pts_min}–{pts_max} pts against {opps_str}" if opps_str else f"posting {pts_min}–{pts_max} pts"
+                bullets.append(
+                    f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
+                    f"{pts_clause} when leading. Describe as the team's go-to scorer."
+                )
+            else:
+                bullets.append(
+                    f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
+                    f"primary scorer. Did not lead team scoring in this sample but is the clear go-to option."
+                )
+            # Keep form leader as notable if they had a big game
+            form_pts = scorer_pts.get(form_leader, [])
+            if form_pts and max(form_pts) >= 25:
+                opp = scorer_peak_opp.get(form_leader, "")
+                vs_str = f" against {opp}" if opp else ""
+                bullets.append(f"  • Notable performance: {form_leader} scored {max(form_pts)} pts{vs_str}")
+
     return "\n".join(bullets)
 
 
@@ -374,7 +428,10 @@ def data_specialist_node(state: GraphState) -> dict:
     """
     query = state["query"]
     teams = extract_teams(query)
-    print(f"[DataSpecialist]    Extracted teams: {[t[0] for t in teams]}")
+    if len(teams) == 2:
+        away_team, home_team = parse_home_away(query, teams)
+        teams = [home_team, away_team]
+    print(f"[DataSpecialist]    Extracted teams (home first): {[t[0] for t in teams]}")
 
 
     if not teams:
@@ -478,6 +535,24 @@ def data_specialist_node(state: GraphState) -> dict:
         else:
             rows.append("| Stats unavailable | — | — | — | — | — |")
 
+        # ── If very short-handed, surface G League / 10-day players ──────────
+        if active_count <= 6:
+            try:
+                all_injured = out_names | {
+                    e.split(" — ")[0]
+                    for e in injuries_by_team.get(espn_id, [])
+                }
+                qualified_names = {p["name"] for p in roster}
+                full_active = _fetch_full_active_roster(espn_id, all_injured)
+                fillers = [n for n in full_active if n not in qualified_names]
+                if fillers:
+                    rows.append(
+                        f"EMERGENCY ROSTER (G League / 10-day — no qualifying stats): "
+                        + ", ".join(fillers)
+                    )
+            except Exception:
+                pass
+
         sections.append("\n".join(rows))
         print(
             f"[DataSpecialist]    {full_name}: W{wins}/L{losses} | {seed_str} | "
@@ -500,6 +575,17 @@ def data_specialist_node(state: GraphState) -> dict:
             print(f"[DataSpecialist]    H2H fetch failed: {exc}")
             h2h_text = "H2H data unavailable."
 
+    # ── Build season-star and PPG lookups for form override ──────────────────
+    season_stars: dict[str, tuple[str, float]] = {}
+    season_ppg_by_team: dict[str, dict[str, float]] = {}
+    for full_name, _, espn_id in teams:
+        out_names = out_names_by_team.get(espn_id, set())
+        team_roster = [p for p in all_players if p["team_id"] == espn_id and p["name"] not in out_names]
+        if team_roster:
+            star = team_roster[0]  # all_players is sorted PPG desc
+            season_stars[espn_id] = (star["name"], float(star["ppg"]))
+            season_ppg_by_team[espn_id] = {p["name"]: float(p["ppg"]) for p in team_roster}
+
     # ── Fetch recent form (last 10 games top scorer, OUT players excluded) ──
     form_parts = []
     for full_name, _, espn_id in teams:
@@ -518,7 +604,11 @@ def data_specialist_node(state: GraphState) -> dict:
                 for l in form_lines:
                     print(f"  • {l}")
                 # ── Pre-analyze form for the composer ──────────────────────
-                summary = _analyze_form(form_lines, full_name)
+                summary = _analyze_form(
+                    form_lines, full_name,
+                    season_star=season_stars.get(espn_id),
+                    season_ppg_lookup=season_ppg_by_team.get(espn_id),
+                )
                 form_parts.append(
                     f"### {full_name} Recent Form — ANALYSIS ONLY (do NOT use raw game lines)\n"
                     f"{summary}"

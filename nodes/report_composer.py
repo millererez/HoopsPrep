@@ -69,26 +69,121 @@ def report_composer_node(state: GraphState) -> dict:
     authorized_names = extract_roster_names(table)
     roster_allowlist = "\n".join(f"  - {n}" for n in authorized_names) or "  (none parsed)"
 
+    # Split the combined table into per-team sections so the LLM
+    # cannot confuse which stats belong to which team.
+    def _extract_team_section(t: str, full_name: str) -> str:
+        marker = f"### {full_name}"
+        if marker not in t:
+            return f"### {full_name}\nStats unavailable."
+        after = t.split(marker)[1]
+        # Everything up to the next ### or end of string
+        next_section = after.find("\n###")
+        return marker + (after[:next_section] if next_section != -1 else after)
+
+    home_stats = _extract_team_section(table, home_full)
+    away_stats  = _extract_team_section(table, away_full)
+
+    # Build the opening sentence in Python — do not let the LLM decide who hosts.
+    import re as _re
+    def _parse_record_seed(section: str) -> tuple[str, str]:
+        m = _re.search(r"Record: W (\d+) / L (\d+) \| Seed: (#\d+ \w+)", section)
+        if m:
+            record = f"{m.group(1)}-{m.group(2)}"
+            seed   = m.group(3).replace(" Conference", "").replace(" Eastern", " East").replace(" Western", " West")
+            return record, seed
+        return "?-?", "?"
+
+    home_record, home_seed = _parse_record_seed(home_stats)
+    opening_sentence = (
+        f"The {home_full} ({home_record}, {home_seed}) "
+        f"host the {away_full} tonight."
+    )
+
+    # Pre-compute emergency roster note in Python — never let the LLM decide.
+    def _emergency_note(section: str, team: str) -> str:
+        for line in section.splitlines():
+            if line.startswith("EMERGENCY ROSTER"):
+                players = line.split(": ", 1)[1] if ": " in line else line
+                return (
+                    f'INCLUDE THIS SENTENCE VERBATIM: "{team} are operating with a depleted '
+                    f'roster due to injuries and are relying on G League and short-term '
+                    f'players: {players}."'
+                )
+        return f"SKIP — {team} has no emergency roster situation. Do NOT mention roster depletion for this team."
+
+    home_emergency = _emergency_note(home_stats, home_full)
+    away_emergency = _emergency_note(away_stats, away_full)
+
+    # Pre-compute Day-To-Day star notes — flag top-3 PPG players who are DTD.
+    def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
+        # Parse PPG from stats table rows for this team
+        player_ppg: list[tuple[str, float]] = []
+        in_table = False
+        for line in stats_section.splitlines():
+            if line.startswith("| Player"):
+                in_table = True
+                continue
+            if in_table and line.startswith("| ") and "---" not in line:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) > 3:
+                    name = parts[1]
+                    try:
+                        ppg = float(parts[3])
+                        player_ppg.append((name, ppg))
+                    except ValueError:
+                        pass
+        top3 = {name for name, _ in sorted(player_ppg, key=lambda x: -x[1])[:3]}
+
+        # Find DTD players for this team in injury summary
+        dtd: list[str] = []
+        in_team = False
+        for line in inj_summary.splitlines():
+            if line.startswith(f"### {team}"):
+                in_team = True
+                continue
+            if line.startswith("###"):
+                in_team = False
+            if in_team and "Day-To-Day" in line:
+                m = _re.match(r"\s*•\s*(.+?)\s*—", line)
+                if m and m.group(1) in top3:
+                    dtd.append(m.group(1))
+
+        if not dtd:
+            return ""
+        names = ", ".join(dtd)
+        return (
+            f"NOTE: {names} {'is' if len(dtd) == 1 else 'are'} listed as Day-To-Day. "
+            f"Add one brief clause noting their availability is uncertain (e.g. 'if he suits up' "
+            f"or 'pending his availability'). Do not omit this."
+        )
+
+    home_dtd_note = _dtd_stars(home_stats, injury_summary, home_full)
+    away_dtd_note = _dtd_stars(away_stats, injury_summary, away_full)
+
     prompt = f"""You are a professional NBA broadcast statistician.
 Write a pre-game broadcast briefing in ENGLISH — clean, spoken prose, TV-ready.
 
 BEFORE WRITING ANYTHING — memorize this banned word list. These phrases are FORBIDDEN.
 If you write any of them, your output is rejected. There are no exceptions:
   looking to | look to | aiming to | hoping to | bounce back | capitalize | will look |
-  seek to | stand out | impressive | dominant | come into | turn around |
+  seek to | stand out | standout | impressive | dominant | come into | comes into | turn around |
   highlighted by | highlighted | struggles | find their footing | found their footing |
   firing on all cylinders | showcasing | potential | when healthy | make a statement |
   of their last | of their past | X of Y games | N of N games |
   leading the offense in | leading the scoring in | led scoring in | led the offense in |
-  averaging between | bringing an average | in their last N games | over the last N games |
-  in his last N games | in her last N games | in the last N games
+  averaging between | posting between | scoring between | between N and | bringing an average |
+  in their last N games | over the last N games | in his last N games | in her last N games |
+  in the last N games | emerged | has emerged | have emerged | a strong showing | strong showing
 
 ═══════════ MATCHUP ═══════════
 {home_full} (HOME)  vs  {away_full} (AWAY)
 ═══════════════════════════════
 
-─── SECTION 1: OFFICIAL STATS (ESPN API) ───
-{table}
+─── SECTION 1A: HOME TEAM STATS — {home_full} ───
+{home_stats}
+
+─── SECTION 1B: AWAY TEAM STATS — {away_full} ───
+{away_stats}
 
 ─── SECTION 2: H2H THIS SEASON (ESPN schedule API — exact, verified) ───
 {h2h_summary}
@@ -108,22 +203,23 @@ These players may be named for performance/stats mentions.
 Write exactly 2 paragraphs, blank line between them. No headers. Do NOT write an injury section — that is handled separately.
 
 PARAGRAPH 1 — {home_full} (HOME):
-• Opening sentence: state the team name, their actual W-L record and conference seed from Section 1,
-  and the opponent. End with a period. Nothing else after "tonight."
-  Example: "The Boston Celtics (48-28, #2 East) host the Miami Heat tonight."
-  Use the real numbers from Section 1 — do not write placeholder text like "W-L" or "N Conf".
-  Do NOT append any clause after "tonight." — no "looking to", no "as they", no "coming off", nothing.
+• THIS PARAGRAPH IS ABOUT {home_full} ONLY. Stats come from SECTION 1A.
+• FIRST SENTENCE IS PRE-WRITTEN. Copy it verbatim, do not change a single word:
+  "{opening_sentence}"
   Never mention home/away again after this sentence.
-• State team PPG and Opp PPG with NBA rank (from Section 1 Team Stats line).
-• State current win/loss streak and last-10 record (from Section 1).
+• State team PPG and Opp PPG with NBA rank (from Section 1A).
+• State current win/loss streak and last-10 record (from Section 1A).
+• EMERGENCY ROSTER: {home_emergency}
+• DAY-TO-DAY STARS: {home_dtd_note if home_dtd_note else f"None — do NOT add availability caveats for {home_full} players."}
 • Weave in 1–2 sentences about their recent form using the ANALYSIS block in Section 5.
   CRITICAL RULES FOR ANALYSIS BLOCK:
   - COLLAPSE ARC / SURGE ARC: If present, you MUST incorporate that arc. Use the quoted phrase
     directly or paraphrase it closely. Do NOT omit or reduce it to a vague summary.
   - "Offensive engine" / "Go-to scorer": Name that player and their point range.
     The range covers only the games they led scoring — NOT all games in the window.
-    Frame it as "in his recent top performances" or name the specific opponents
-    (e.g., "scoring 26 and 32 against Denver and Golden State").
+    Frame it as naming each score with its opponent
+    (e.g., "scoring 26 against Denver and 32 against Golden State").
+    NEVER write "between X and Y points" — always name the individual scores.
     NEVER write "over the last N games" or "in their last N games" with a point range —
     that implies they scored that range every game, which is false.
   - "Spread offense": Describe collective output. Do not single out one scorer.
@@ -134,13 +230,17 @@ PARAGRAPH 1 — {home_full} (HOME):
   Never use vague filler: "several recent games", "multiple times", "consistently."
   Never write mechanical counts: "X of their last Y", "N of N games."
   Use ONLY players in Section 3. Do not invent or recall from memory.
-• Weave in H2H context from Section 2: include exact scores, local dates, and home team for each game.
+• Weave in H2H context from Section 2: include exact scores, local dates, and location for EVERY game.
+  Every single H2H line must include a location — arena name, city, or "at [Team]". No exceptions.
   H2H appears ONLY here — do NOT repeat or reference it in Paragraph 2.
 
 PARAGRAPH 2 — {away_full} (AWAY):
+• THIS PARAGRAPH IS ABOUT {away_full} ONLY. Stats come from SECTION 1B.
 • Open directly with their record and seed. Do NOT restate home/away.
-• State team PPG and Opp PPG with NBA rank.
-• State current streak and last-10.
+• State team PPG and Opp PPG with NBA rank (from Section 1B).
+• State current streak and last-10 (from Section 1B).
+• EMERGENCY ROSTER: {away_emergency}
+• DAY-TO-DAY STARS: {away_dtd_note if away_dtd_note else f"None — do NOT add availability caveats for {away_full} players."}
 • Weave in 1–2 sentences about their recent form using the ANALYSIS block in Section 5.
   Same CRITICAL RULES as Paragraph 1 — COLLAPSE ARC / SURGE ARC must be included if present.
   Never use vague filler: "several recent games", "multiple times", "consistently."
@@ -150,6 +250,10 @@ PARAGRAPH 2 — {away_full} (AWAY):
 
 
 ABSOLUTE RULES:
+0. PARAGRAPH ASSIGNMENT IS FIXED AND NON-NEGOTIABLE:
+   Paragraph 1 = {home_full}. Paragraph 2 = {away_full}.
+   If paragraph 1 contains the name "{away_full}" as the subject, you are wrong. Rewrite it.
+   If paragraph 2 contains the name "{home_full}" as the subject, you are wrong. Rewrite it.
 1. ZERO source citations. ZERO URLs. ZERO parentheses containing sources.
    Pure spoken broadcast prose.
 2. ROSTER INTEGRITY:
@@ -159,7 +263,7 @@ ABSOLUTE RULES:
 3. Home/away: sentence 1 of paragraph 1 only.
 4. H2H: use Section 2 exclusively. Do not use any H2H claim from Section 4.
    Copy arena names VERBATIM from Section 2. Never substitute from memory.
-5. All numbers (W/L, PPG, seed, H2H scores) must match Sections 1 and 2 exactly.
+5. All numbers (W/L, PPG, seed, H2H scores) must match Sections 1A, 1B, and 2 exactly.
    RECORD FORMAT: Always write records as "W-L" with a dash and numerals (e.g., "40-36").
    Never write records in words ("40 wins and 36 losses") or any other format.
 6. PLAYER PARAGRAPH OWNERSHIP — HARD WALL:
@@ -179,6 +283,12 @@ Write ONLY the 2 paragraphs. Do not reproduce any tables."""
 
     response = llm.invoke(prompt)
     prose = response.content.strip()
+
+    # ── Force correct opening sentence in Python — LLM cannot be trusted ────
+    # Replace whatever first sentence the LLM wrote with our pre-built opener.
+    first_period = prose.find(".")
+    if first_period != -1:
+        prose = opening_sentence + prose[first_period + 1:]
 
     # ── Build injury block in Python — never trust LLM for this ──────────
     def _injury_line(team_name: str) -> str:
