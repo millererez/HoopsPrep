@@ -2,278 +2,26 @@
 nodes/data_specialist.py
 ────────────────────────
 Node 1 — Data Specialist (100% ESPN API, zero LLM, zero Tavily).
-Fetches standings, player stats, and H2H game history.
+Fetches standings, player stats, injuries, recent form, and H2H game history.
 """
 
-import requests
-from datetime import datetime
+import re
+from collections import Counter
 
-from core.state import GraphState, ESPN_SEASON_YEAR, EST, ESPN_TEAMS, extract_teams, parse_home_away, ordinal
-
-# ---------------------------------------------------------------------------
-# ESPN API endpoints
-# ---------------------------------------------------------------------------
-
-_ESPN_STATS_URL = (
-    "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
-    "/statistics/byathlete?region=us&lang=en&contentorigin=espn"
-    "&isqualified=true&sort=offensive.avgPoints%3Adesc&limit=500"
-)
-_ESPN_STANDINGS_URL = (
-    "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
+from core.state import GraphState, ordinal, extract_teams, parse_home_away
+from nodes.espn_client import (
+    build_standings_lookup,
+    build_player_lookup,
+    fetch_h2h_games,
+    fetch_injuries,
+    fetch_full_active_roster,
+    fetch_recent_form,
 )
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Form analysis
 # ---------------------------------------------------------------------------
-
-def _espn_fetch(url: str) -> dict:
-    resp = requests.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _build_standings_lookup() -> dict[str, dict]:
-    """
-    Return {espn_id: dict} for every team.
-    Includes: wins, losses, ppg, opp_ppg, ppg_rank, def_rank,
-              conf, conf_seed, streak, l10.
-    """
-    data = _espn_fetch(_ESPN_STANDINGS_URL)
-    rows = []
-    for conf_entry in data.get("children", []):
-        conf_name = conf_entry.get("name", "")
-        for entry in conf_entry.get("standings", {}).get("entries", []):
-            tid   = entry["team"]["id"]
-            stats = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
-            rows.append({
-                "id":        tid,
-                "wins":      int(float(stats.get("wins", 0))),
-                "losses":    int(float(stats.get("losses", 0))),
-                "ppg":       float(stats.get("avgPointsFor", 0) or 0),
-                "opp_ppg":   float(stats.get("avgPointsAgainst", 0) or 0),
-                "conf":      conf_name,
-                "conf_seed": int(float(stats.get("playoffSeed", 0) or 0)),
-                "streak":    stats.get("streak", "—"),
-                "l10":       stats.get("Last Ten Games", "—"),
-            })
-
-    ppg_sorted = sorted(rows, key=lambda r: r["ppg"], reverse=True)
-    ppg_rank   = {r["id"]: i + 1 for i, r in enumerate(ppg_sorted)}
-    def_sorted = sorted(rows, key=lambda r: r["opp_ppg"])
-    def_rank   = {r["id"]: i + 1 for i, r in enumerate(def_sorted)}
-
-    return {
-        r["id"]: {**r, "ppg_rank": ppg_rank[r["id"]], "def_rank": def_rank[r["id"]]}
-        for r in rows
-    }
-
-
-def _build_player_lookup() -> list[dict]:
-    """
-    Fetch league-wide per-game stats (sorted by PPG descending).
-    ESPN JSON layout (verified against live API):
-      categories[0] = general   → totals[1]  = MIN,  totals[11] = RPG
-      categories[1] = offensive → totals[0]  = PPG,  totals[3]  = FG%,
-                                  totals[6]  = 3P%,  totals[7]  = APG,
-                                  totals[9]  = FT%,  totals[11] = TOV
-      categories[2] = defensive → totals[0]  = STL,  totals[1]  = BLK
-    """
-    data = _espn_fetch(_ESPN_STATS_URL)
-    players = []
-    for a in data.get("athletes", []):
-        athlete = a.get("athlete", {})
-        cats    = a.get("categories", [])
-        if len(cats) < 3:
-            continue
-        try:
-            mins   = cats[0]["totals"][1]
-            rpg    = cats[0]["totals"][11]
-            ppg    = cats[1]["totals"][0]
-            fg_pct = cats[1]["totals"][3]
-            tpp    = cats[1]["totals"][6]
-            apg    = cats[1]["totals"][7]
-            ft_pct = cats[1]["totals"][9]
-            tov    = cats[1]["totals"][11]
-            stl    = cats[2]["totals"][0]
-            blk    = cats[2]["totals"][1]
-        except (IndexError, KeyError):
-            continue
-        players.append({
-            "name":    athlete.get("displayName", "Unknown"),
-            "team_id": athlete.get("teamId", ""),
-            "mins": mins, "ppg": ppg, "fg_pct": fg_pct,
-            "tpp": tpp, "ft_pct": ft_pct,
-            "rpg": rpg, "apg": apg,
-            "stl": stl, "blk": blk, "tov": tov,
-        })
-    return players
-
-
-def _fetch_h2h_games(
-    t1_id: str, t2_id: str,
-    t1_name: str, t2_name: str,
-) -> str:
-    """
-    Fetch all COMPLETED regular-season games between t1 and t2 this season
-    directly from the ESPN schedule endpoint.
-
-    Returns a formatted multi-line string with exact scores, dates, home team,
-    and arena — no LLM involved, no guessing.
-
-    Dates are converted from UTC to US Eastern time (game-night local date).
-    """
-    url = (
-        f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-        f"/teams/{t1_id}/schedule?season={ESPN_SEASON_YEAR}"
-    )
-    data = _espn_fetch(url)
-
-    lines = []
-    for event in data.get("events", []):
-        comp = event["competitions"][0]
-        if not comp["status"]["type"]["completed"]:
-            continue
-        competitor_ids = [c["team"]["id"] for c in comp["competitors"]]
-        if t2_id not in competitor_ids:
-            continue
-
-        # UTC → Eastern local date (NBA games end after midnight UTC)
-        utc_dt     = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
-        local_date = utc_dt.astimezone(EST).strftime("%B %d, %Y")
-
-        venue = comp.get("venue", {})
-        arena = venue.get("fullName", "unknown arena")
-        city  = venue.get("address", {}).get("city", "")
-
-        scores    = {}
-        home_name = ""
-        for c in comp["competitors"]:
-            tid  = c["team"]["id"]
-            name = c["team"]["displayName"]
-            sc   = int(float(c["score"]["displayValue"]))
-            scores[tid] = {"name": name, "score": sc}
-            if c["homeAway"] == "home":
-                home_name = name
-
-        t1 = scores.get(t1_id, {"name": t1_name, "score": 0})
-        t2 = scores.get(t2_id, {"name": t2_name, "score": 0})
-
-        if t1["score"] > t2["score"]:
-            win_name, win_sc = t1["name"], t1["score"]
-            los_name, los_sc = t2["name"], t2["score"]
-        else:
-            win_name, win_sc = t2["name"], t2["score"]
-            los_name, los_sc = t1["name"], t1["score"]
-
-        lines.append(
-            f"• {local_date}: {win_name} def. {los_name} {win_sc}-{los_sc} "
-            f"| Home team: {home_name} | Arena: {arena}, {city}"
-        )
-
-    if not lines:
-        return "No completed H2H games found this season."
-    return "\n".join(lines)
-
-
-def _fetch_injuries(team_id: str, team_name: str) -> list[str]:
-    """
-    Fetch current injury list for a team from ESPN roster API.
-    Returns list of strings: "PlayerName — STATUS"
-    Only includes players with an active injury entry.
-    """
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
-    data = _espn_fetch(url)
-    results = []
-    for athlete in data.get("athletes", []):
-        injuries = athlete.get("injuries", [])
-        if not injuries:
-            continue
-        # Use the most recent injury entry
-        latest = max(injuries, key=lambda i: i.get("date", ""))
-        status = latest.get("status", "")
-        if status:
-            results.append(f"{athlete['displayName']} — {status}")
-    return results
-
-
-def _fetch_full_active_roster(team_id: str, injured_names: set[str]) -> list[str]:
-    """
-    Fetch all active (non-injured) players from the ESPN roster endpoint.
-    Used when the qualified stats table is very short (≤6 players) to surface
-    G League call-ups and 10-day contract players who have no qualifying stats.
-    Returns a list of display names not already in the stats table.
-    """
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
-    data = _espn_fetch(url)
-    active = []
-    for athlete in data.get("athletes", []):
-        name = athlete.get("displayName", "")
-        if name and name not in injured_names:
-            active.append(name)
-    return active
-
-
-def _fetch_recent_form(
-    team_id: str, team_name: str, n_games: int = 3
-) -> list[str]:
-    """
-    Fetch the top scorer from each of the last n completed games for a team.
-    Uses ESPN schedule + game summary APIs.
-    Returns list of strings: "Date vs Opponent: PlayerName scored X pts (W/L score)"
-    """
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/schedule?season={ESPN_SEASON_YEAR}"
-    data = _espn_fetch(url)
-
-    completed = [
-        e for e in data.get("events", [])
-        if e["competitions"][0]["status"]["type"]["completed"]
-    ]
-    recent = completed[-n_games:]
-
-    lines = []
-    for event in recent:
-        comp    = event["competitions"][0]
-        game_id = comp["id"]
-        utc_dt  = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
-        date_str = utc_dt.astimezone(EST).strftime("%b %d")
-
-        # Determine opponent and result
-        team_score = opp_score = opp_name = ""
-        result = ""
-        for c in comp["competitors"]:
-            if c["team"]["id"] == team_id:
-                team_score = int(float(c["score"]["displayValue"]))
-                result = "W" if c.get("winner") else "L"
-            else:
-                opp_score = int(float(c["score"]["displayValue"]))
-                opp_name  = c["team"]["abbreviation"]
-
-        # Fetch top scorer from game summary
-        try:
-            summary = _espn_fetch(
-                f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={game_id}"
-            )
-            top_scorer = top_pts = None
-            for team_leaders in summary.get("leaders", []):
-                if team_leaders["team"]["id"] == team_id:
-                    for cat in team_leaders.get("leaders", []):
-                        if cat.get("displayName") == "Points":
-                            leader = cat["leaders"][0]
-                            top_scorer = leader["athlete"]["displayName"]
-                            top_pts    = leader["displayValue"]
-                            break
-        except Exception:
-            top_scorer = top_pts = None
-
-        scorer_str = f"{top_scorer} {top_pts} pts" if top_scorer else "scorer unavailable"
-        lines.append(
-            f"{date_str} vs {opp_name} ({result} {team_score}-{opp_score}): {scorer_str}"
-        )
-
-    return lines
-
 
 def _analyze_form(
     form_lines: list[str],
@@ -286,15 +34,11 @@ def _analyze_form(
     Covers: dominant scorer, their point range, win/loss arc.
     Format: bullet points the LLM must use verbatim as the basis for its narrative.
     """
-    import re
-    from collections import Counter
-
-    # Parse each line: "Mon DD vs OPP (W/L score-score): Player N pts"
     wins = losses = 0
     scorer_counts: Counter = Counter()
     scorer_pts: dict[str, list[int]] = {}
-    scorer_peak_opp: dict[str, str] = {}   # name -> opponent for their peak game
-    scorer_opps: dict[str, list[str]] = {}  # name -> list of opponents in games they led
+    scorer_peak_opp: dict[str, str] = {}
+    scorer_opps: dict[str, list[str]] = {}
     recent_results = []
 
     for line in form_lines:
@@ -321,10 +65,8 @@ def _analyze_form(
     total = len(form_lines)
     bullets = []
 
-    # Win/loss record
     bullets.append(f"  • Record in last {total} games: {wins}-{losses}")
 
-    # Win/loss arc — pre-written phrase for LLM to incorporate
     if recent_results and total >= 6:
         first_half  = recent_results[:total//2]
         second_half = recent_results[total//2:]
@@ -343,22 +85,21 @@ def _analyze_form(
                 f"dropping {second_l} of their last {len(second_half)} after going {first_w}-{first_l} to start this stretch.'"
             )
 
-    # Dominant scorer — directive only, no game counts
     if scorer_counts:
         top_name, top_count = scorer_counts.most_common(1)[0]
         pts_list = scorer_pts[top_name]
-        pts_min, pts_max = min(pts_list), max(pts_list)
-        opps_str = " and ".join(scorer_opps.get(top_name, []))
+        opps_list = scorer_opps.get(top_name, [])
+        per_game_str = " and ".join(
+            f"{pts} pts vs {opp}" for pts, opp in zip(pts_list, opps_list)
+        )
         if top_count >= round(total * 0.6):
             bullets.append(
-                f"  • Offensive engine: {top_name} — led team scoring against {opps_str}, "
-                f"posting {pts_min}–{pts_max} pts in those games. "
+                f"  • Offensive engine: {top_name} — led team scoring: {per_game_str}. "
                 f"Describe as the team's go-to scorer. Do NOT say 'over the last N games'."
             )
         elif top_count >= round(total * 0.4):
             bullets.append(
-                f"  • Go-to scorer: {top_name} — led team scoring against {opps_str}, "
-                f"posting {pts_min}–{pts_max} pts in those games. "
+                f"  • Go-to scorer: {top_name} — led team scoring: {per_game_str}. "
                 f"Describe as the primary offensive option. Do NOT say 'over the last N games'."
             )
         else:
@@ -367,43 +108,38 @@ def _analyze_form(
                 f"Describe as a collective effort with no single go-to option."
             )
 
-        # Notable single-game peaks — skip if player already named as engine/go-to
-        # (their peak opponent is already embedded in that bullet)
         all_peaks = [(name, max(pts)) for name, pts in scorer_pts.items() if max(pts) >= 30]
         all_peaks.sort(key=lambda x: -x[1])
         for name, peak in all_peaks[:2]:
             if name == top_name:
-                continue  # already covered in the offensive engine / go-to bullet
+                continue
             opp = scorer_peak_opp.get(name, "")
             vs_str = f" against {opp}" if opp else ""
             bullets.append(f"  • Notable performance: {name} scored {peak} pts{vs_str}")
 
     # ── Season-star override ──────────────────────────────────────────────────
-    # If the season PPG leader differs from the form-derived scorer and has a
-    # meaningful PPG gap (≥5 PPG), they are the true offensive engine regardless
-    # of who happened to lead a few recent games.
     if season_star and scorer_counts:
         star_name, star_ppg = season_star
         form_leader, _ = scorer_counts.most_common(1)[0]
         form_leader_season_ppg = (season_ppg_lookup or {}).get(form_leader, 0.0)
-        if star_name != form_leader and star_ppg - form_leader_season_ppg >= 5:
-            # Remove the form-derived engine/go-to bullet
+        if star_name != form_leader and star_ppg - form_leader_season_ppg >= 3:
             bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
             star_pts = scorer_pts.get(star_name, [])
             if star_pts:
-                opps_str = " and ".join(scorer_opps.get(star_name, []))
-                pts_min, pts_max = min(star_pts), max(star_pts)
-                pts_clause = f"posting {pts_min}–{pts_max} pts against {opps_str}" if opps_str else f"posting {pts_min}–{pts_max} pts"
+                star_opps = scorer_opps.get(star_name, [])
+                per_game_str = " and ".join(
+                    f"{pts} pts vs {opp}" for pts, opp in zip(star_pts, star_opps)
+                )
+                pts_clause = f"scoring {per_game_str} when leading" if per_game_str else f"scoring {star_pts[0]} pts when leading"
                 bullets.append(
                     f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
-                    f"{pts_clause} when leading. Describe as the team's go-to scorer."
+                    f"{pts_clause}. Describe as the team's go-to scorer."
                 )
             else:
                 bullets.append(
                     f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
                     f"primary scorer. Did not lead team scoring in this sample but is the clear go-to option."
                 )
-            # Keep form leader as notable if they had a big game
             form_pts = scorer_pts.get(form_leader, [])
             if form_pts and max(form_pts) >= 25:
                 opp = scorer_peak_opp.get(form_leader, "")
@@ -422,9 +158,10 @@ def data_specialist_node(state: GraphState) -> dict:
     Node 1 — Data Specialist (100% ESPN API, zero LLM, zero Tavily).
     Fetches:
       • Standings: W/L, seed, team PPG/Opp-PPG with league rank, streak, L10
-      • Player stats: top-5 scorers per team (PPG, FG%, MIN, RPG, APG)
-      • H2H: all completed games this season between the two teams,
-             with exact scores, local dates, home team, and arena
+      • Player stats: top scorers per team (PPG, FG%, MIN, RPG, APG, etc.)
+      • H2H: all completed games this season between the two teams
+      • Injuries: current injury report per team
+      • Recent form: last 5 games top scorer with pre-analyzed summary
     """
     query = state["query"]
     teams = extract_teams(query)
@@ -433,14 +170,13 @@ def data_specialist_node(state: GraphState) -> dict:
         teams = [home_team, away_team]
     print(f"[DataSpecialist]    Extracted teams (home first): {[t[0] for t in teams]}")
 
-
     if not teams:
         print("[DataSpecialist]    Could not identify any NBA teams in query.")
         return {"player_stats_table": "No teams identified.", "h2h_summary": ""}
 
     print("[DataSpecialist]    Fetching standings ...")
     try:
-        standings = _build_standings_lookup()
+        standings = build_standings_lookup()
         print(f"[DataSpecialist]    Standings: {len(standings)} teams")
     except Exception as exc:
         print(f"[DataSpecialist]    Standings failed: {exc}")
@@ -448,7 +184,7 @@ def data_specialist_node(state: GraphState) -> dict:
 
     print("[DataSpecialist]    Fetching player stats ...")
     try:
-        all_players = _build_player_lookup()
+        all_players = build_player_lookup()
         print(f"[DataSpecialist]    Players: {len(all_players)} qualified")
     except Exception as exc:
         print(f"[DataSpecialist]    Player stats failed: {exc}")
@@ -461,11 +197,10 @@ def data_specialist_node(state: GraphState) -> dict:
     for full_name, _, espn_id in teams:
         print(f"[DataSpecialist]    Fetching injuries: {full_name} ...")
         try:
-            injured = _fetch_injuries(espn_id, full_name)
+            injured = fetch_injuries(espn_id, full_name)
             injuries_by_team[espn_id] = injured
-            # Collect names of OUT players (not Day-To-Day) for roster filtering
             out_names_by_team[espn_id] = {
-                entry.split(" — ")[0]
+                entry.split(" \u2014 ")[0]
                 for entry in injured
                 if "Out" in entry and "Day-To-Day" not in entry
             }
@@ -513,7 +248,6 @@ def data_specialist_node(state: GraphState) -> dict:
 
         out_count    = len(out_names)
         active_count = len(roster)
-        # Only flag in header when genuinely short-handed (≤8 active)
         availability = (
             f" | Active roster: {active_count} players ({out_count} OUT)"
             if active_count <= 8 else ""
@@ -535,7 +269,6 @@ def data_specialist_node(state: GraphState) -> dict:
         else:
             rows.append("| Stats unavailable | — | — | — | — | — |")
 
-        # ── If very short-handed, surface G League / 10-day players ──────────
         if active_count <= 6:
             try:
                 all_injured = out_names | {
@@ -543,7 +276,7 @@ def data_specialist_node(state: GraphState) -> dict:
                     for e in injuries_by_team.get(espn_id, [])
                 }
                 qualified_names = {p["name"] for p in roster}
-                full_active = _fetch_full_active_roster(espn_id, all_injured)
+                full_active = fetch_full_active_roster(espn_id, all_injured)
                 fillers = [n for n in full_active if n not in qualified_names]
                 if fillers:
                     rows.append(
@@ -566,7 +299,7 @@ def data_specialist_node(state: GraphState) -> dict:
         t2_full, _, t2_id = teams[1]
         print(f"[DataSpecialist]    Fetching H2H: {t1_full} vs {t2_full} ...")
         try:
-            h2h_text = _fetch_h2h_games(t1_id, t2_id, t1_full, t2_full)
+            h2h_text = fetch_h2h_games(t1_id, t2_id, t1_full, t2_full)
             game_count = h2h_text.count("•")
             print(f"[DataSpecialist]    H2H: {game_count} completed game(s) found")
             for line in h2h_text.splitlines():
@@ -586,15 +319,14 @@ def data_specialist_node(state: GraphState) -> dict:
             season_stars[espn_id] = (star["name"], float(star["ppg"]))
             season_ppg_by_team[espn_id] = {p["name"]: float(p["ppg"]) for p in team_roster}
 
-    # ── Fetch recent form (last 10 games top scorer, OUT players excluded) ──
+    # ── Fetch recent form (last 5 games, OUT players excluded) ──────────────
     form_parts = []
     for full_name, _, espn_id in teams:
         print(f"[DataSpecialist]    Fetching recent form: {full_name} ...")
         out_names = out_names_by_team.get(espn_id, set())
         active_names = {p["name"] for p in all_players if p["team_id"] == espn_id}
         try:
-            form_lines = _fetch_recent_form(espn_id, full_name, n_games=5)
-            # Keep only games where top scorer is active and not OUT
+            form_lines = fetch_recent_form(espn_id, full_name, n_games=5)
             form_lines = [
                 l for l in form_lines
                 if any(name in l for name in active_names)
@@ -603,7 +335,6 @@ def data_specialist_node(state: GraphState) -> dict:
             if form_lines:
                 for l in form_lines:
                     print(f"  • {l}")
-                # ── Pre-analyze form for the composer ──────────────────────
                 summary = _analyze_form(
                     form_lines, full_name,
                     season_star=season_stars.get(espn_id),

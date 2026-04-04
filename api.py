@@ -93,7 +93,8 @@ _ESPN_SCOREBOARD_URL = (
 
 def _fetch_tonight_games() -> list[Game]:
     """Fetch today's NBA games from ESPN scoreboard API."""
-    resp = requests.get(_ESPN_SCOREBOARD_URL, timeout=15)
+    today_date = datetime.now(tz=EST).strftime("%Y%m%d")
+    resp = requests.get(_ESPN_SCOREBOARD_URL, params={"dates": today_date}, timeout=15)
     resp.raise_for_status()
     data = resp.json()
 

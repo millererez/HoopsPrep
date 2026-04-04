@@ -298,12 +298,12 @@ Write ONLY the 2 paragraphs. Do not reproduce any tables."""
         section = injury_summary.split(marker)[1].split("###")[0]
         entries = [l.strip(" •").strip() for l in section.splitlines() if l.strip().startswith("•")]
         if not entries:
-            return f"{team_name} — None reported."
+            return f"{team_name} \u2014 None reported."
         formatted = ", ".join(
-            f"{e.split(' — ')[0]} ({'OUT' if 'Out' in e else 'Day-To-Day'})"
-            for e in entries if " — " in e
+            f"{e.split(' \u2014 ')[0]} ({'OUT' if 'Out' in e else 'Day-To-Day'})"
+            for e in entries if " \u2014 " in e
         )
-        return f"{team_name} — {formatted}" if formatted else f"{team_name} — None reported."
+        return f"{team_name} \u2014 {formatted}" if formatted else f"{team_name} \u2014 None reported."
 
     injury_block = (
         "Injury Report:\n"
