@@ -26,7 +26,9 @@ class GraphState(TypedDict):
     h2h_summary: str             # ESPN API: completed H2H games with scores + venue
     injury_summary: str          # ESPN API: current injury list per team
     recent_form: str             # ESPN API: top scorer from each of last 3 games per team
-    team_narrative_bullets: str  # Tavily: (reserved for future use)
+    team_narrative_bullets: str  # Tavily ingestion status (logging only)
+    prose_section: str           # LLM prose — 2 team paragraphs
+    storylines_section: str      # RAG — 3 storyline bullets
     final_report: str
 
 # ---------------------------------------------------------------------------

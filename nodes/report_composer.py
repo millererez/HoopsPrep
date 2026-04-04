@@ -180,29 +180,7 @@ Write ONLY the 2 paragraphs. Do not reproduce any tables."""
     response = llm.invoke(prompt)
     prose = response.content.strip()
 
-    # ── Build injury block in Python — never trust LLM for this ──────────
-    def _injury_line(team_name: str) -> str:
-        marker = f"### {team_name}"
-        if marker not in injury_summary:
-            return f"{team_name} — None reported."
-        section = injury_summary.split(marker)[1].split("###")[0]
-        entries = [l.strip(" •").strip() for l in section.splitlines() if l.strip().startswith("•")]
-        if not entries:
-            return f"{team_name} — None reported."
-        formatted = ", ".join(
-            f"{e.split(' — ')[0]} ({'OUT' if 'Out' in e else 'Day-To-Day'})"
-            for e in entries if " — " in e
-        )
-        return f"{team_name} — {formatted}" if formatted else f"{team_name} — None reported."
-
-    injury_block = (
-        "Injury Report:\n"
-        + _injury_line(home_full) + "\n"
-        + _injury_line(away_full)
-    )
-
-    report = prose + "\n\n" + injury_block + "\n\n" + table
-    print(f"[ReportComposer]    Final report ready ({len(report)} chars)")
-    return {"final_report": report}
+    print(f"[ReportComposer]    Prose ready ({len(prose)} chars)")
+    return {"prose_section": prose}
 
 
