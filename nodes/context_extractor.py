@@ -8,6 +8,7 @@ and upserts into ChromaDB for RAG retrieval by storylines_composer.
 
 import hashlib
 import os
+import re
 from datetime import datetime
 
 from tavily import TavilyClient
@@ -16,6 +17,30 @@ from core.state import GraphState, CURRENT_SEASON, extract_teams, parse_home_awa
 from db.chroma import get_collection
 
 _CHUNK_CHARS = 500
+
+
+def _clean(text: str) -> str:
+    """Strip HTML/markdown noise, keeping only prose sentences."""
+    # markdown links [text](url) → text
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # bare URLs
+    text = re.sub(r'https?://\S+', '', text)
+    # markdown headers
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    # lines that are pure nav/UI (short lines with | or all-caps or no letters)
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if len(stripped) < 30 and not re.search(r'[a-z]{4,}', stripped):
+            continue
+        if stripped.count('|') >= 3:
+            continue
+        lines.append(stripped)
+    return " ".join(lines)
 
 
 def _chunk(text: str) -> list[str]:
@@ -71,14 +96,14 @@ def context_extractor_node(state: GraphState) -> dict:
         r1 = tavily.search(query=q1, max_results=3,
                            include_domains=["espn.com", "nba.com", "theathletic.com",
                                             "cbssports.com", "bleacherreport.com", "si.com"],
-                           days=120)
+                           days=120, include_raw_content=True)
 
         # Query 2: What to watch / preview angle
         q2 = f'"{team_name}" NBA 2026 season preview what to watch storyline'
         r2 = tavily.search(query=q2, max_results=2,
                            include_domains=["espn.com", "nba.com", "cbssports.com",
                                             "bleacherreport.com", "si.com", "theathletic.com"],
-                           days=120)
+                           days=120, include_raw_content=True)
 
         seen: set[str] = set()
         combined = ""
@@ -88,11 +113,13 @@ def context_extractor_node(state: GraphState) -> dict:
                 continue
             seen.add(url)
             title = result.get("title", "")
-            content = result.get("content", "")
+            # prefer raw_content (full page) over snippet
+            content = result.get("raw_content") or result.get("content", "")
             combined += f"\n{title}\n{content}\n"
-            print(f"  → {title[:80]}")
+            print(f"  → {title[:80]} ({len(content)} chars)")
 
         if combined.strip():
+            combined = _clean(combined)
             n = _upsert(team_name, combined.strip(), today)
             total_chunks += n
             print(f"[ContextExtractor]  Upserted {n} chunks for {team_name}")

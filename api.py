@@ -32,6 +32,7 @@ load_dotenv()
 
 from main import build_graph
 from core.state import GraphState, EST
+from db.cache import get_cached, set_cached
 
 # ---------------------------------------------------------------------------
 # App + rate limiter setup
@@ -126,7 +127,7 @@ def _fetch_tonight_games() -> list[Game]:
     return games
 
 
-def _get_game_by_id(game_id: str) -> Game | None:
+def _get_game_by_id(game_id: str):
     """Return the Game object for a given ID if it's in tonight's schedule."""
     games = _fetch_tonight_games()
     for g in games:
@@ -194,6 +195,16 @@ def post_briefing(
         f"{game.away_team} at {game.home_team}"
     )
 
+    cached = get_cached(body.game_id)
+    if cached:
+        print(f"[API]   Cache hit for game {body.game_id}")
+        return BriefingResponse(
+            game_id   = game.game_id,
+            home_team = game.home_team,
+            away_team = game.away_team,
+            report    = cached,
+        )
+
     initial_state: GraphState = {
         "query":                  query,
         "player_stats_table":     "",
@@ -201,6 +212,8 @@ def post_briefing(
         "injury_summary":         "",
         "recent_form":            "",
         "team_narrative_bullets": "",
+        "prose_section":          "",
+        "storylines_section":     "",
         "final_report":           "",
     }
 
@@ -209,9 +222,12 @@ def post_briefing(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
 
+    report = result["final_report"]
+    set_cached(body.game_id, report)
+
     return BriefingResponse(
         game_id   = game.game_id,
         home_team = game.home_team,
         away_team = game.away_team,
-        report    = result["final_report"],
+        report    = report,
     )
