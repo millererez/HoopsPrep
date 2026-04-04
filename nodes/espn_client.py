@@ -16,8 +16,9 @@ from core.state import ESPN_SEASON_YEAR, EST
 _ESPN_STATS_URL = (
     "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
     "/statistics/byathlete?region=us&lang=en&contentorigin=espn"
-    "&isqualified=true&sort=offensive.avgPoints%3Adesc&limit=500"
+    "&sort=offensive.avgPoints%3Adesc&limit=500"
 )
+_MIN_GAMES = 15  # minimum games played to appear in stats table
 _ESPN_STANDINGS_URL = (
     "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
 )
@@ -83,6 +84,7 @@ def build_player_lookup() -> list[dict]:
         if len(cats) < 3:
             continue
         try:
+            gp     = int(float(cats[0]["totals"][0]))
             mins   = cats[0]["totals"][1]
             rpg    = cats[0]["totals"][11]
             ppg    = cats[1]["totals"][0]
@@ -94,6 +96,8 @@ def build_player_lookup() -> list[dict]:
             stl    = cats[2]["totals"][0]
             blk    = cats[2]["totals"][1]
         except (IndexError, KeyError):
+            continue
+        if gp < _MIN_GAMES:
             continue
         players.append({
             "name":    athlete.get("displayName", "Unknown"),
@@ -240,7 +244,7 @@ def fetch_recent_form(
                 result = "W" if c.get("winner") else "L"
             else:
                 opp_score = int(float(c["score"]["displayValue"]))
-                opp_name  = c["team"]["abbreviation"]
+                opp_name  = c["team"]["displayName"]
 
         try:
             summary = espn_fetch(

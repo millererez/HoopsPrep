@@ -6,11 +6,66 @@ Combines ESPN API stats, ESPN H2H data, and Tavily narrative context
 into a clean TV broadcast briefing.
 """
 
+import re as _re_global
+
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage
 
 from core.state import GraphState, extract_teams, parse_home_away, extract_roster_names
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+# ---------------------------------------------------------------------------
+# Banned phrases — single source of truth used in prompt + retry checker
+# ---------------------------------------------------------------------------
+
+_BANNED_PHRASES = [
+    "looking to", "look to", "aiming to", "hoping to", "bounce back", "capitalize",
+    "will look", "seek to", "stand out", "standout", "impressive", "dominant",
+    "come into", "comes into", "turn around", "highlighted by", "highlighted",
+    "struggles", "find their footing", "found their footing", "firing on all cylinders",
+    "showcasing", "potential", "when healthy", "make a statement",
+    "of their last", "of their past",
+    "leading the offense in", "leading the scoring in", "led scoring in", "led the offense in",
+    "averaging between", "posting between", "scoring between", "between n and",
+    "bringing an average", "emerged", "has emerged", "have emerged",
+    "a strong showing", "strong showing", "collective offensive", "offensive rhythm",
+    "offensive output", "won all", "all ten of", "notable performances",
+    "recent success", "recent form", "recent stretch", "performing well",
+    "their ability to", "has seen them", "contributing to their",
+    "winning four", "winning n of", "consistent", "surge in", "effective in",
+    "demonstrating", "generating points", "strong collective", "in their recent",
+    "adds uncertainty", "if he suits up", "pending availability",
+    "at the bottom", "which ranks", "which is nth",
+    "notable performance", "contributing",
+    "has shown improvement", "shown improvement", "offensive presence",
+    "demonstrating", "showcasing", "displaying", "exhibiting",
+]
+
+# Patterns for "N of N games" style (any digits)
+_BANNED_PATTERNS = [
+    r"\d+ of their last \d+",
+    r"\d+ of \d+ games",
+    r"in their last \d+ games",
+    r"over the last \d+ games",
+    r"in his last \d+ games",
+    r"in the last \d+ games",
+    r"all \d+ of their",
+    r"won all \d+",
+    r"winning \d+ of",
+]
+
+
+def _find_violations(text: str) -> list[str]:
+    found = []
+    lower = text.lower()
+    for phrase in _BANNED_PHRASES:
+        if phrase in lower:
+            found.append(f'"{phrase}"')
+    for pattern in _BANNED_PATTERNS:
+        if _re_global.search(pattern, lower):
+            found.append(f"/{pattern}/")
+    return found
 
 def _bullets_for_team(bullets: str, team_full: str) -> str:
     lines = bullets.splitlines()
@@ -99,6 +154,29 @@ def report_composer_node(state: GraphState) -> dict:
         f"host the {away_full} tonight."
     )
 
+    # Pre-compute streak+last-10 text — skip streak if it's exactly 1 game.
+    _NUM_WORDS = {
+        2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+        7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
+        12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+    }
+
+    def _streak_text(section: str) -> str:
+        m = _re.search(r"Streak: (W|L)(\d+).*Last 10: ([\d-]+)", section)
+        if not m:
+            return ""
+        direction, n, last10 = m.group(1), int(m.group(2)), m.group(3)
+        word = "winning" if direction == "W" else "losing"
+        n_word = _NUM_WORDS.get(n, str(n))
+        if n == 1:
+            return f"State only: 'They have a record of {last10} in their last ten contests.' Do NOT mention the {word} streak."
+        if direction == "W" and n >= 10:
+            return f"State: 'They are on a {n_word}-game winning streak.' Do NOT include the last-10 record."
+        return f"State: 'They are on a {n_word}-game {word} streak and have a record of {last10} in their last ten contests.'"
+
+    home_streak_text = _streak_text(home_stats)
+    away_streak_text = _streak_text(away_stats)
+
     # Pre-compute emergency roster note in Python — never let the LLM decide.
     def _emergency_note(section: str, team: str) -> str:
         for line in section.splitlines():
@@ -133,8 +211,11 @@ def report_composer_node(state: GraphState) -> dict:
                     except ValueError:
                         pass
         top3 = {name for name, _ in sorted(player_ppg, key=lambda x: -x[1])[:3]}
+        qualified_names = {name for name, _ in player_ppg}
 
         # Find DTD players for this team in injury summary
+        # Flag: top-3 PPG players who are DTD, AND any DTD player not in the
+        # stats table at all (injured most of the season — more newsworthy, not less).
         dtd: list[str] = []
         in_team = False
         for line in inj_summary.splitlines():
@@ -144,17 +225,21 @@ def report_composer_node(state: GraphState) -> dict:
             if line.startswith("###"):
                 in_team = False
             if in_team and "Day-To-Day" in line:
-                m = _re.match(r"\s*•\s*(.+?)\s*—", line)
-                if m and m.group(1) in top3:
-                    dtd.append(m.group(1))
+                m = _re.match(r"\s*•\s*(.+?)\s*\u2014", line)
+                if m:
+                    name = m.group(1)
+                    if name in top3 or name not in qualified_names:
+                        dtd.append(name)
 
         if not dtd:
             return ""
         names = ", ".join(dtd)
+        verb = "is" if len(dtd) == 1 else "are"
         return (
-            f"NOTE: {names} {'is' if len(dtd) == 1 else 'are'} listed as Day-To-Day. "
-            f"Add one brief clause noting their availability is uncertain (e.g. 'if he suits up' "
-            f"or 'pending his availability'). Do not omit this."
+            f"NOTE: {names} {verb} listed as Day-To-Day. "
+            f"Write exactly one sentence stating this — e.g. '{names} {'is' if len(dtd) == 1 else 'are'} listed as Day-To-Day.' "
+            f"Day-To-Day already implies uncertainty. Do NOT add 'if he suits up', 'adds uncertainty', "
+            f"'pending availability', or any other uncertainty phrase. Just state the status, nothing more."
         )
 
     home_dtd_note = _dtd_stars(home_stats, injury_summary, home_full)
@@ -164,16 +249,10 @@ def report_composer_node(state: GraphState) -> dict:
 Write a pre-game broadcast briefing in ENGLISH — clean, spoken prose, TV-ready.
 
 BEFORE WRITING ANYTHING — memorize this banned word list. These phrases are FORBIDDEN.
-If you write any of them, your output is rejected. There are no exceptions:
-  looking to | look to | aiming to | hoping to | bounce back | capitalize | will look |
-  seek to | stand out | standout | impressive | dominant | come into | comes into | turn around |
-  highlighted by | highlighted | struggles | find their footing | found their footing |
-  firing on all cylinders | showcasing | potential | when healthy | make a statement |
-  of their last | of their past | X of Y games | N of N games |
-  leading the offense in | leading the scoring in | led scoring in | led the offense in |
-  averaging between | posting between | scoring between | between N and | bringing an average |
-  in their last N games | over the last N games | in his last N games | in her last N games |
-  in the last N games | emerged | has emerged | have emerged | a strong showing | strong showing
+If you write any of them, your output is rejected and you will be asked to rewrite. There are no exceptions:
+  {" | ".join(_BANNED_PHRASES)}
+  Also forbidden: any phrase matching "N of their last N", "N of N games", "in their last N games",
+  "over the last N games", "all N of their", "won all N", "winning N of" (where N is any number).
 
 ═══════════ MATCHUP ═══════════
 {home_full} (HOME)  vs  {away_full} (AWAY)
@@ -207,8 +286,8 @@ PARAGRAPH 1 — {home_full} (HOME):
 • FIRST SENTENCE IS PRE-WRITTEN. Copy it verbatim, do not change a single word:
   "{opening_sentence}"
   Never mention home/away again after this sentence.
-• State team PPG and Opp PPG with NBA rank (from Section 1A).
-• State current win/loss streak and last-10 record (from Section 1A).
+• State team PPG and Opp PPG with NBA rank (from Section 1A). Format both as "[X] points per game, ranking [N]th in the NBA" — do not use "which ranks" or "which is".
+• STREAK/LAST-10 (pre-written — copy verbatim): {home_streak_text}
 • EMERGENCY ROSTER: {home_emergency}
 • DAY-TO-DAY STARS: {home_dtd_note if home_dtd_note else f"None — do NOT add availability caveats for {home_full} players."}
 • Weave in 1–2 sentences about their recent form using the ANALYSIS block in Section 5.
@@ -218,11 +297,12 @@ PARAGRAPH 1 — {home_full} (HOME):
   - "Offensive engine" / "Go-to scorer": Name that player and their point range.
     The range covers only the games they led scoring — NOT all games in the window.
     Frame it as naming each score with its opponent
-    (e.g., "scoring 26 against Denver and 32 against Golden State").
+    (e.g., "scoring 26 against the Denver Nuggets and 32 against the Golden State Warriors").
+    Use the full team name from the analysis block — never shorten to just a city name (e.g. "Los Angeles" alone is ambiguous — write "the Los Angeles Lakers" or "the Los Angeles Clippers").
     NEVER write "between X and Y points" — always name the individual scores.
     NEVER write "over the last N games" or "in their last N games" with a point range —
     that implies they scored that range every game, which is false.
-  - "Spread offense": Describe collective output. Do not single out one scorer.
+  - "Spread offense": Write one sentence only — state it is a collective effort with no single go-to scorer. No judgment about quality, improvement, or effectiveness. No filler.
   - "Notable performance": If the ANALYSIS block names an opponent for the peak game, mention it
     (e.g., "peaking at 32 against Golden State"). If no opponent is named, state the number only —
     never write vague phrases like "in one of those games", "in one of these outings", "in a recent game."
@@ -230,22 +310,20 @@ PARAGRAPH 1 — {home_full} (HOME):
   Never use vague filler: "several recent games", "multiple times", "consistently."
   Never write mechanical counts: "X of their last Y", "N of N games."
   Use ONLY players in Section 3. Do not invent or recall from memory.
-• Weave in H2H context from Section 2: include exact scores, local dates, and location for EVERY game.
-  Every single H2H line must include a location — arena name, city, or "at [Team]". No exceptions.
-  H2H appears ONLY here — do NOT repeat or reference it in Paragraph 2.
+• Do NOT include H2H — it is displayed separately after the injury report.
 
 PARAGRAPH 2 — {away_full} (AWAY):
 • THIS PARAGRAPH IS ABOUT {away_full} ONLY. Stats come from SECTION 1B.
 • Open directly with their record and seed. Do NOT restate home/away.
-• State team PPG and Opp PPG with NBA rank (from Section 1B).
-• State current streak and last-10 (from Section 1B).
+• State team PPG and Opp PPG with NBA rank (from Section 1B). Format both as "[X] points per game, ranking [N]th in the NBA" — do not use "which ranks" or "which is".
+• STREAK/LAST-10 (pre-written — copy verbatim): {away_streak_text}
 • EMERGENCY ROSTER: {away_emergency}
 • DAY-TO-DAY STARS: {away_dtd_note if away_dtd_note else f"None — do NOT add availability caveats for {away_full} players."}
 • Weave in 1–2 sentences about their recent form using the ANALYSIS block in Section 5.
   Same CRITICAL RULES as Paragraph 1 — COLLAPSE ARC / SURGE ARC must be included if present.
   Never use vague filler: "several recent games", "multiple times", "consistently."
   Never write mechanical counts: "X of their last Y", "N of N games."
-• Do NOT mention H2H here. It was already covered in Paragraph 1.
+• Do NOT mention H2H here. It is displayed separately.
   Use ONLY players in Section 3. Do not invent or recall from memory.
 
 
@@ -261,8 +339,7 @@ ABSOLUTE RULES:
    • Injury mentions: player must appear in Section 4. Do NOT name injured players from memory.
    If a team has no entry in Section 4, omit injury sentences for that team entirely.
 3. Home/away: sentence 1 of paragraph 1 only.
-4. H2H: use Section 2 exclusively. Do not use any H2H claim from Section 4.
-   Copy arena names VERBATIM from Section 2. Never substitute from memory.
+4. H2H: Do NOT include any H2H content in the paragraphs. It is handled separately.
 5. All numbers (W/L, PPG, seed, H2H scores) must match Sections 1A, 1B, and 2 exactly.
    RECORD FORMAT: Always write records as "W-L" with a dash and numerals (e.g., "40-36").
    Never write records in words ("40 wins and 36 losses") or any other format.
@@ -272,17 +349,43 @@ ABSOLUTE RULES:
 7. BANNED PHRASES — see the list at the top of this prompt. Every one of them is forbidden.
    Reread your output word by word before finalizing. Any sentence containing a banned phrase
    must be discarded and rewritten from scratch.
-8. STREAK ACCURACY: The current streak is in Section 1 as "Streak: W/LN". Use it exactly.
-   Never infer streak from recent form or from ANALYSIS — Section 1 is the ONLY source for streak.
-   The ANALYSIS block does NOT contain a streak — ignore any streak-like language there.
+8. STREAK ACCURACY: The streak/last-10 text is pre-written in each paragraph instruction — copy it verbatim.
+   Never infer streak from recent form or from ANALYSIS — use only the pre-written text.
+   NOTE: the ban on "in their last N games" applies to scoring ranges only — a W-L record like "8-2 in their last ten" is allowed.
 9. ACTIVE ROSTER: Never state or infer how many players are available. Do not mention
    roster size unless Section 1 explicitly shows "Active roster: N players" in the record line.
 10. Tone: dry and factual — a stats sheet read aloud, not a feature article.
+11. NO FILLER SENTENCES. Every sentence must contain at least one specific stat, player name, score, or date.
+    Sentences like "The Spurs have demonstrated a consistent offensive rhythm" contain zero facts — delete them.
 
 Write ONLY the 2 paragraphs. Do not reproduce any tables."""
 
-    response = llm.invoke(prompt)
+    # ── LLM call with retry loop for banned phrases ──────────────────────────
+    messages = [HumanMessage(content=prompt)]
+    response = llm.invoke(messages)
     prose = response.content.strip()
+
+    for attempt in range(2):
+        violations = _find_violations(prose)
+        if not violations:
+            break
+        print(f"[ReportComposer]    Banned phrases detected (attempt {attempt + 1}): {violations}")
+        messages = [
+            HumanMessage(content=prompt),
+            AIMessage(content=prose),
+            HumanMessage(content=(
+                f"Your output contains these banned phrases: {', '.join(violations)}. "
+                f"Rewrite ONLY the sentences that contain them. "
+                f"Keep every other sentence identical. "
+                f"Return the full 2-paragraph output."
+            )),
+        ]
+        response = llm.invoke(messages)
+        prose = response.content.strip()
+
+    violations = _find_violations(prose)
+    if violations:
+        print(f"[ReportComposer]    WARNING — banned phrases remain after retries: {violations}")
 
     # ── Force correct opening sentence in Python — LLM cannot be trusted ────
     # Replace whatever first sentence the LLM wrote with our pre-built opener.
@@ -306,12 +409,51 @@ Write ONLY the 2 paragraphs. Do not reproduce any tables."""
         return f"{team_name} \u2014 {formatted}" if formatted else f"{team_name} \u2014 None reported."
 
     injury_block = (
-        "Injury Report:\n"
-        + _injury_line(home_full) + "\n"
+        "Injury Report:\n\n"
+        + _injury_line(home_full) + "\n\n"
         + _injury_line(away_full)
     )
 
-    report = prose + "\n\n" + injury_block + "\n\n" + table
+    def _h2h_prose(raw: str) -> str:
+        """Convert raw H2H bullet lines into natural prose sentences."""
+        if not raw or raw.startswith("No completed"):
+            return raw
+        sentences = []
+        for line in raw.splitlines():
+            line = line.strip().lstrip("• ")
+            if not line:
+                continue
+            # Format: "Month DD, YYYY: Winner def. Loser SCORE | Home team: X | Arena: Y, City"
+            m = _re_global.match(
+                r"(\w+ \d+, \d+): (.+?) def\. (.+?) (\d+-\d+) \| Home team: (.+?) \| Arena: (.+)",
+                line,
+            )
+            if not m:
+                sentences.append(line)
+                continue
+            date, winner, loser, score, home, arena_city = m.groups()
+            # Shorten date: "February 08, 2026" → "February 8"
+            date_short = _re_global.sub(r"\b0(\d)\b", r"\1", date.rsplit(",", 1)[0])
+            arena_natural = arena_city.replace(", ", " in ")
+            sentences.append((winner, f"On {date_short}, {winner} won {score} at {arena_natural}."))
+        if not sentences:
+            return ""
+        result = [sentences[0][1]]
+        first_winner = sentences[0][0]
+        for winner, sentence in sentences[1:]:
+            if winner == first_winner:
+                # Same winner — use "they" to avoid repetition
+                sentence = _re_global.sub(
+                    r"^On (\S+ \d+), " + _re_global.escape(winner),
+                    r"On \1, they",
+                    sentence,
+                )
+            result.append(sentence)
+        return " ".join(result)
+
+    h2h_block = "H2H This Season:\n\n" + (_h2h_prose(h2h_summary) if h2h_summary else "No completed H2H games this season.")
+
+    report = prose + "\n\n" + injury_block + "\n\n" + h2h_block + "\n\n" + table
     print(f"[ReportComposer]    Final report ready ({len(report)} chars)")
     return {"final_report": report}
 
