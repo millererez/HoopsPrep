@@ -95,17 +95,17 @@ def _analyze_form(
         if top_count >= round(total * 0.6):
             bullets.append(
                 f"  • Offensive engine: {top_name} — led team scoring: {per_game_str}. "
-                f"Describe as the team's go-to scorer. Do NOT say 'over the last N games'."
+                f"Open directly: '{top_name} scored...' — no preamble or characterization."
             )
         elif top_count >= round(total * 0.4):
             bullets.append(
                 f"  • Go-to scorer: {top_name} — led team scoring: {per_game_str}. "
-                f"Describe as the primary offensive option. Do NOT say 'over the last N games'."
+                f"Open directly: '{top_name} scored...' — no preamble or characterization."
             )
         else:
             bullets.append(
-                f"  • Spread offense: no consistent individual scorer in the last {total} games. "
-                f"Describe as a collective effort with no single go-to option."
+                f"  • Spread offense: no consistent individual scorer. "
+                f"INCLUDE THIS SENTENCE VERBATIM: '{team_name} operate with a spread offense, with no single go-to scorer.'"
             )
 
         all_peaks = [(name, max(pts)) for name, pts in scorer_pts.items() if max(pts) >= 30]
@@ -118,11 +118,21 @@ def _analyze_form(
             bullets.append(f"  • Notable performance: {name} scored {peak} pts{vs_str}")
 
     # ── Season-star override ──────────────────────────────────────────────────
-    if season_star and scorer_counts:
+    # Two triggers:
+    # 1. Star differs from form leader and has ≥3 PPG gap over them (original)
+    # 2. Star leads team by ≥5 PPG over the second-best player (dominance override)
+    #    — catches cases where star ties for form leader or scores in spread offense
+    if season_star:
         star_name, star_ppg = season_star
-        form_leader, _ = scorer_counts.most_common(1)[0]
-        form_leader_season_ppg = (season_ppg_lookup or {}).get(form_leader, 0.0)
-        if star_name != form_leader and star_ppg - form_leader_season_ppg >= 3:
+        all_ppgs = sorted((season_ppg_lookup or {}).values(), reverse=True)
+        second_best_ppg = all_ppgs[1] if len(all_ppgs) > 1 else 0.0
+        dominant = star_ppg - second_best_ppg >= 5
+
+        form_leader = scorer_counts.most_common(1)[0][0] if scorer_counts else None
+        form_leader_season_ppg = (season_ppg_lookup or {}).get(form_leader, 0.0) if form_leader else 0.0
+        gap_override = form_leader and star_name != form_leader and star_ppg - form_leader_season_ppg >= 3
+
+        if dominant or gap_override:
             bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
             star_pts = scorer_pts.get(star_name, [])
             if star_pts:
@@ -133,18 +143,19 @@ def _analyze_form(
                 pts_clause = f"scoring {per_game_str} when leading" if per_game_str else f"scoring {star_pts[0]} pts when leading"
                 bullets.append(
                     f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
-                    f"{pts_clause}. Describe as the team's go-to scorer."
+                    f"{pts_clause}. Open directly: '{star_name} scored...' — no preamble or characterization."
                 )
             else:
                 bullets.append(
                     f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
                     f"primary scorer. Did not lead team scoring in this sample but is the clear go-to option."
                 )
-            form_pts = scorer_pts.get(form_leader, [])
-            if form_pts and max(form_pts) >= 25:
-                opp = scorer_peak_opp.get(form_leader, "")
-                vs_str = f" against {opp}" if opp else ""
-                bullets.append(f"  • Notable performance: {form_leader} scored {max(form_pts)} pts{vs_str}")
+            if form_leader:
+                form_pts = scorer_pts.get(form_leader, [])
+                if form_pts and max(form_pts) >= 25 and form_leader != star_name:
+                    opp = scorer_peak_opp.get(form_leader, "")
+                    vs_str = f" against {opp}" if opp else ""
+                    bullets.append(f"  • Notable performance: {form_leader} scored {max(form_pts)} pts{vs_str}")
 
     return "\n".join(bullets)
 

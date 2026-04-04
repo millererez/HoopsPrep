@@ -40,6 +40,7 @@ _BANNED_PHRASES = [
     "notable performance", "contributing",
     "has shown improvement", "shown improvement", "offensive presence",
     "demonstrating", "showcasing", "displaying", "exhibiting",
+    "contributions", "has been a", "relying on", "peaking at",
 ]
 
 # Patterns for "N of N games" style (any digits)
@@ -296,15 +297,16 @@ PARAGRAPH 1 — {home_full} (HOME):
     directly or paraphrase it closely. Do NOT omit or reduce it to a vague summary.
   - "Offensive engine" / "Go-to scorer": Name that player and their point range.
     The range covers only the games they led scoring — NOT all games in the window.
+    Open directly with "[Player] scored..." — NEVER open with "[Player] has been..." or any characterization.
     Frame it as naming each score with its opponent
     (e.g., "scoring 26 against the Denver Nuggets and 32 against the Golden State Warriors").
     Use the full team name from the analysis block — never shorten to just a city name (e.g. "Los Angeles" alone is ambiguous — write "the Los Angeles Lakers" or "the Los Angeles Clippers").
     NEVER write "between X and Y points" — always name the individual scores.
     NEVER write "over the last N games" or "in their last N games" with a point range —
     that implies they scored that range every game, which is false.
-  - "Spread offense": Write one sentence only — state it is a collective effort with no single go-to scorer. No judgment about quality, improvement, or effectiveness. No filler.
+  - "Spread offense": ONLY mention spread offense if the ANALYSIS block contains a bullet explicitly labeled "Spread offense". If no such bullet exists, do NOT write anything about spread offense. If the bullet exists, it contains a pre-written sentence marked VERBATIM — copy it exactly, do not rephrase, extend, or add any clause.
   - "Notable performance": If the ANALYSIS block names an opponent for the peak game, mention it
-    (e.g., "peaking at 32 against Golden State"). If no opponent is named, state the number only —
+    (e.g., "scoring 32 against Golden State"). If no opponent is named, state the number only —
     never write vague phrases like "in one of those games", "in one of these outings", "in a recent game."
   Example: "Orlando have fallen off sharply, dropping seven of their last five after going 4-1 to open this stretch."
   Never use vague filler: "several recent games", "multiple times", "consistently."
