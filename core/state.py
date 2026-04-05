@@ -29,6 +29,7 @@ class GraphState(TypedDict):
     team_narrative_bullets: str  # Tavily ingestion status (logging only)
     stakes_context: str          # computed: seed consequences + games back/ahead for both teams
     narrative_section: str       # LLM — 4-paragraph unified narrative
+    review_issues: str           # reviewer checklist output — empty = approved
     final_report: str
 
 # ---------------------------------------------------------------------------

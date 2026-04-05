@@ -29,6 +29,8 @@ def _clean(text: str) -> str:
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     # HTML tags
     text = re.sub(r'<[^>]+>', '', text)
+    # inline source tags like "www.si.com•20h" or "site.com•1d"
+    text = re.sub(r'\S+\.\S+•\S+', '', text)
     # lines that are pure nav/UI (short lines with | or all-caps or no letters)
     lines = []
     for line in text.splitlines():
@@ -40,7 +42,23 @@ def _clean(text: str) -> str:
         if stripped.count('|') >= 3:
             continue
         lines.append(stripped)
-    return " ".join(lines)
+    text = " ".join(lines)
+
+    # Strip all icon/logo navigation (e.g., "!Boston Celtics Logo", "!NBA Store Icon")
+    text = re.sub(r'![\w\s]+(Logo|Icon)\s*', '', text)
+    # Strip "Last Ladder: No. N" and similar stats-table artifacts
+    text = re.sub(r'Last Ladder:.*', '', text)
+
+    # Strip sentences containing article source-isms that the LLM tends to echo verbatim
+    _SOURCE_ISMS = re.compile(
+        r'\b(here at|click here|subscribe|sign up|follow us|read more|'
+        r'more on this|earlier this week|last week on|our staff|we asked|'
+        r'you can find|check out|tune in|stay tuned)\b',
+        re.IGNORECASE,
+    )
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = [s for s in sentences if not _SOURCE_ISMS.search(s)]
+    return " ".join(sentences)
 
 
 def _chunk(text: str) -> list[str]:
@@ -91,35 +109,63 @@ def context_extractor_node(state: GraphState) -> dict:
     for team_name in [home_full, away_full]:
         print(f"[ContextExtractor]  Searching: {team_name} ...")
 
-        # Query 1: Season arc and narrative
-        q1 = f'"{team_name}" NBA {CURRENT_SEASON} season storyline arc key players analysis'
+        # Focused query: recent performance and season context — avoids generic award/ladder articles
+        q1 = f'"{team_name}" NBA 2026 recent games season players performance standings'
         r1 = tavily.search(query=q1, max_results=3,
                            include_domains=["espn.com", "nba.com", "theathletic.com",
                                             "cbssports.com", "bleacherreport.com", "si.com"],
-                           days=120, include_raw_content=True)
-
-        # Query 2: What to watch / preview angle
-        q2 = f'"{team_name}" NBA 2026 season preview what to watch storyline'
-        r2 = tavily.search(query=q2, max_results=2,
-                           include_domains=["espn.com", "nba.com", "cbssports.com",
-                                            "bleacherreport.com", "si.com", "theathletic.com"],
-                           days=120, include_raw_content=True)
+                           days=45, include_raw_content=True)
 
         seen: set[str] = set()
         combined = ""
-        for result in r1.get("results", []) + r2.get("results", []):
+        team_lower  = team_name.lower()
+        short_name  = team_name.split()[-1].lower()   # e.g. "Celtics" from "Boston Celtics"
+        for result in r1.get("results", []):
             url = result.get("url", "")
             if url in seen:
                 continue
             seen.add(url)
             title = result.get("title", "")
-            # prefer raw_content (full page) over snippet
-            content = result.get("raw_content") or result.get("content", "")
+            raw = result.get("raw_content") or result.get("content", "")
+            content = raw[:8000] if raw else ""
+
+            # Relevance gate: discard articles that barely mention the team
+            mentions = content.lower().count(team_lower) + content.lower().count(short_name)
+            if mentions < 3:
+                print(f"  → SKIPPED ({mentions} mentions): {title[:70]}")
+                continue
+
             combined += f"\n{title}\n{content}\n"
-            print(f"  → {title[:80]} ({len(content)} chars)")
+            print(f"  → {title[:80]} ({len(content)} chars, {mentions} mentions)")
 
         if combined.strip():
             combined = _clean(combined)
+            # Quality gate — if content is thin (<1500 chars), retry with a broader query
+            if len(combined) < 1500:
+                print(f"[ContextExtractor]  Thin content for {team_name} ({len(combined)} chars) — retrying ...")
+                q_fallback = f"{team_name} NBA 2026 season players games"
+                r_fallback = tavily.search(
+                    query=q_fallback, max_results=3,
+                    include_domains=["espn.com", "nba.com", "cbssports.com",
+                                     "bleacherreport.com", "si.com", "theathletic.com"],
+                    days=45, include_raw_content=True,
+                )
+                for result in r_fallback.get("results", []):
+                    url = result.get("url", "")
+                    if url in seen:
+                        continue
+                    seen.add(url)
+                    title = result.get("title", "")
+                    raw = result.get("raw_content") or result.get("content", "")
+                    content = raw[:8000] if raw else ""
+                    mentions = content.lower().count(team_lower) + content.lower().count(short_name)
+                    if mentions < 3:
+                        print(f"  → [fallback] SKIPPED ({mentions} mentions): {title[:70]}")
+                        continue
+                    combined += f"\n{title}\n{content}\n"
+                    print(f"  → [fallback] {title[:80]} ({len(content)} chars, {mentions} mentions)")
+                combined = _clean(combined)
+
             n = _upsert(team_name, combined.strip(), today)
             total_chunks += n
             print(f"[ContextExtractor]  Upserted {n} chunks for {team_name}")

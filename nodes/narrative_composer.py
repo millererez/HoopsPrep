@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from core.state import GraphState, extract_teams, parse_home_away, extract_roster_names
 from db.chroma import get_collection
+from nodes.utils import BANNED_PHRASES, BANNED_PATTERNS, find_violations
 
 _llm = None
 
@@ -23,69 +24,14 @@ _N_RESULTS = 4
 def _get_llm():
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+        _llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
     return _llm
 
 
-# ---------------------------------------------------------------------------
-# Banned phrases
-# ---------------------------------------------------------------------------
-
-_BANNED_PHRASES = [
-    "looking to", "look to", "aiming to", "hoping to", "bounce back", "capitalize",
-    "will look", "seek to", "stand out", "standout", "impressive", "dominant",
-    "come into", "comes into", "turn around", "highlighted by", "highlighted",
-    "struggles", "struggled", "find their footing", "found their footing", "firing on all cylinders",
-    "showcasing", "potential", "when healthy", "make a statement",
-    "of their last", "of their past",
-    "leading the offense in", "leading the scoring in", "led scoring in", "led the offense in",
-    "averaging between", "posting between", "scoring between", "between n and",
-    "bringing an average", "emerged", "has emerged", "have emerged",
-    "a strong showing", "strong showing", "collective offensive", "offensive rhythm",
-    "offensive output", "won all", "all ten of", "notable performances",
-    "recent success", "recent form", "recent stretch", "performing well",
-    "their ability to", "has seen them", "contributing to their",
-    "winning four", "winning n of", "consistent", "surge in", "effective in",
-    "demonstrating", "generating points", "strong collective", "in their recent",
-    "adds uncertainty", "if he suits up", "pending availability",
-    "at the bottom", "which ranks", "which is nth",
-    "notable performance", "contributing",
-    "has shown improvement", "shown improvement", "offensive presence",
-    "demonstrating", "showcasing", "displaying", "exhibiting",
-    "contributions", "has been a", "relying on", "peaking at",
-    "seeking to", "need to find", "will need", "must find", "establish consistency",
-    "key factor in determining", "formidable", "shooting prowess", "offensive firepower",
-    "striving to", "strive to", "vie for", "vying for", "trying to maintain",
-    "look to regain", "regain their", "looking to regain",
-    "aim for", "aims for", "aimed for",
-    "the stakes are high", "stakes are high for both",
-    "enter this matchup", "enters this matchup", "entering this matchup",
-    "comes into this", "come into this", "going into this",
-]
-
-_BANNED_PATTERNS = [
-    r"\d+ of their last \d+",
-    r"\d+ of \d+ games",
-    r"in their last \d+ games",
-    r"over the last \d+ games",
-    r"in his last \d+ games",
-    r"in the last \d+ games",
-    r"all \d+ of their",
-    r"won all \d+",
-    r"winning \d+ of",
-]
-
-
-def _find_violations(text: str) -> list[str]:
-    found = []
-    lower = text.lower()
-    for phrase in _BANNED_PHRASES:
-        if phrase in lower:
-            found.append(f'"{phrase}"')
-    for pattern in _BANNED_PATTERNS:
-        if _re.search(pattern, lower):
-            found.append(f"/{pattern}/")
-    return found
+# Banned phrases imported from nodes.utils — single source of truth
+_BANNED_PHRASES  = BANNED_PHRASES
+_BANNED_PATTERNS = BANNED_PATTERNS
+_find_violations = find_violations
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +250,8 @@ def _matchup_signal(home_full: str, away_full: str, table: str) -> str:
                             "ppg":  float(parts[3]),
                             "tpa":  float(parts[6]),
                             "tpp":  float(parts[7]),
+                            "rpg":  float(parts[10]),
+                            "apg":  float(parts[11]),
                             "blk":  float(parts[13]),
                         })
                     except (ValueError, IndexError):
@@ -323,7 +271,7 @@ def _matchup_signal(home_full: str, away_full: str, table: str) -> str:
     anchors = [p for p in home_players if p["mins"] >= 20]
     paint_anchor = max(anchors, key=lambda p: p["blk"]) if anchors else None
 
-    if best_shooter and paint_anchor and paint_anchor["blk"] >= 0.8:
+    if best_shooter and paint_anchor and paint_anchor["blk"] >= 1.5:
         return (
             f"MATCHUP ANCHOR: {best_shooter['name']} ({away_full}) shoots {best_shooter['tpp']}% "
             f"from three ({best_shooter['ppg']} PPG). {paint_anchor['name']} ({home_full}) averages "
@@ -332,26 +280,108 @@ def _matchup_signal(home_full: str, away_full: str, table: str) -> str:
             f"from the paint determines spacing for both offenses."
         )
 
-    # Fallback: top scorer vs top scorer
+    # Fallback: top scorer vs top scorer — enrich with multiple stats to prevent repetition
     away_star = max(away_players, key=lambda p: p["ppg"]) if away_players else None
     home_star = max(home_players, key=lambda p: p["ppg"]) if home_players else None
     if away_star and home_star:
         return (
-            f"MATCHUP ANCHOR: {away_star['name']} ({away_full}, {away_star['ppg']} PPG) "
-            f"vs {home_star['name']} ({home_full}, {home_star['ppg']} PPG) — "
-            f"frame paragraph 4 around this head-to-head."
+            f"MATCHUP ANCHOR: {away_star['name']} ({away_full}) — {away_star['ppg']} PPG, "
+            f"{away_star['tpp']}% from three, {away_star['rpg']} RPG. "
+            f"{home_star['name']} ({home_full}) — {home_star['ppg']} PPG, "
+            f"{home_star['tpp']}% from three, {home_star['rpg']} RPG. "
+            f"Frame paragraph 4 around this duel. Use a DIFFERENT stat in each sentence — "
+            f"do not repeat any number already used in this paragraph."
         )
     return ""
 
 
-def _retrieve(team_name: str) -> str:
+def _narrative_milestone(ctx: str, roster: list[str]) -> str:
+    """
+    Scan retrieved chunks for a concrete milestone sentence tied to an active player.
+    Looks for: game performances with numbers, ROY race, records, historical comparisons.
+    Returns a pre-computed signal so the LLM can't miss it.
+    """
+    if not ctx or not roster:
+        return ""
+
+    last_names = {p.split()[-1].lower(): p for p in roster}
+
+    MILESTONE_KEYWORDS = [
+        "roy", "rookie of the year", "record", "surpassed", "most", "franchise",
+        "historic", "history", "all-time", "ladder", "mvp", "surpass",
+    ]
+
+    best_sentence = ""
+    best_player   = ""
+    best_score    = 0
+
+    for sent in _re.split(r'(?<=[.!?])\s+', ctx):
+        if len(sent) < 60 or len(sent) > 400:
+            continue
+        # Skip markdown/stats headers — not prose
+        if _re.search(r'\*\*|#{1,6}\s|^\d+\.|ladder:|stats:|draft pick:', sent, _re.IGNORECASE):
+            continue
+        # Must have at least 6 words to be a real sentence
+        if len(sent.split()) < 6:
+            continue
+        lower = sent.lower()
+        player_hit = next(
+            (full for last, full in last_names.items() if last in lower),
+            None
+        )
+        if not player_hit:
+            continue
+        score = sum(1 for kw in MILESTONE_KEYWORDS if kw in lower)
+        if _re.search(r'\d+\s*(points?|pts)', lower):
+            score += 1
+        # Require a number for low-score sentences, but franchise/record sentences
+        # often describe milestones in words — allow them if score is high enough
+        if score == 0:
+            continue
+        if score == 1 and not _re.search(r'\d', sent):
+            continue
+        if score > best_score:
+            best_score    = score
+            best_sentence = sent.strip()
+            best_player   = player_hit
+
+    if best_sentence and best_score >= 1:
+        return (
+            f"MILESTONE ({best_player}): include this specific detail — "
+            f'"{best_sentence}"'
+        )
+    return ""
+
+
+def _absent_star_signal(team_name: str, recent_form: str) -> str:
+    """Extract the ABSENT STAR bullet from the team's recent form section, if present."""
+    import re as re2
+    pattern = rf"### {re2.escape(team_name)}.*?(?=\n###|\Z)"
+    m = re2.search(pattern, recent_form, re2.DOTALL)
+    if not m:
+        return ""
+    for line in m.group(0).splitlines():
+        if "ABSENT STAR:" in line:
+            return line.strip()
+    return ""
+
+
+def _retrieve(team_name: str, today: str) -> str:
     try:
         results = get_collection().query(
             query_texts=[f"{team_name} NBA season storyline arc key players recent games"],
             n_results=_N_RESULTS,
-            where={"team_name": team_name},
+            where={"$and": [{"team_name": team_name}, {"date": today}]},
         )
         docs = results.get("documents", [[]])[0]
+        if not docs:
+            print(f"[NarrativeComposer] No chunks for {team_name} on {today} — trying without date filter")
+            results = get_collection().query(
+                query_texts=[f"{team_name} NBA season storyline arc key players recent games"],
+                n_results=_N_RESULTS,
+                where={"team_name": team_name},
+            )
+            docs = results.get("documents", [[]])[0]
         return "\n\n".join(docs) if docs else ""
     except Exception as exc:
         print(f"[NarrativeComposer] ChromaDB query failed for {team_name}: {exc}")
@@ -369,6 +399,9 @@ def narrative_composer_node(state: GraphState) -> dict:
     injury_summary = state.get("injury_summary", "")
     recent_form    = state.get("recent_form", "")
     stakes_context = state.get("stakes_context", "")
+
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
 
     teams = extract_teams(query)
     if len(teams) < 2:
@@ -396,8 +429,15 @@ def narrative_composer_node(state: GraphState) -> dict:
     roster_allowlist = "\n".join(f"  - {n}" for n in authorized_names) or "  (none parsed)"
 
     print(f"[NarrativeComposer] Retrieving ChromaDB context for {home_full} + {away_full} ...")
-    home_ctx = _retrieve(home_full)
-    away_ctx = _retrieve(away_full)
+    home_ctx = _retrieve(home_full, today)
+    away_ctx = _retrieve(away_full, today)
+
+    home_milestone   = _narrative_milestone(home_ctx, home_roster)
+    away_milestone   = _narrative_milestone(away_ctx, away_roster)
+    home_absent_star = _absent_star_signal(home_full, recent_form)
+    away_absent_star = _absent_star_signal(away_full, recent_form)
+    print(f"[NarrativeComposer] Home milestone: {home_milestone or 'none'}")
+    print(f"[NarrativeComposer] Away milestone: {away_milestone or 'none'}")
 
     prompt = f"""You are a professional NBA analyst writing a pre-game briefing for fans.
 Write in clear, factual prose — specific and grounded, not hype.
@@ -439,11 +479,9 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 ─── RECENT FORM (pre-analyzed — do NOT use raw game lines) ───
 {recent_form}
 
-─── {home_full} NARRATIVE CONTEXT (retrieved) ───
-{home_ctx or "No context available."}
-
-─── {away_full} NARRATIVE CONTEXT (retrieved) ───
-{away_ctx or "No context available."}
+─── PRE-EXTRACTED SIGNALS (Python-verified from retrieved content) ───
+{home_full} MILESTONE: {home_milestone if home_milestone else "None."}
+{away_full} MILESTONE: {away_milestone if away_milestone else "None."}
 
 ═══════════ OUTPUT ═══════════
 
@@ -458,6 +496,8 @@ PARAGRAPH 1 — CONTEXT AND STAKES:
 - CRITICAL: use STAKES CONTEXT to state specific consequences — games back, what each position
   means, what is and isn't within reach. Do NOT invent any games-back numbers — use only what
   STAKES CONTEXT provides. Do NOT use effort/desire framing ("striving to", "vying for", etc.).
+- REQUIRED: include at least one specific games-back number for EACH team from STAKES CONTEXT.
+  A team's playoff situation described with no games-back number is an automatic error.
 - POSITION LABELS: use the exact label from STAKES CONTEXT — "play-in #7", "play-in #8",
   "direct playoff #6", etc. Do NOT simplify play-in positions to "playoff spot" or "playoffs" —
   play-in is not a guaranteed playoff berth. Only say "direct playoff berth" if the label says
@@ -469,63 +509,65 @@ PARAGRAPH 1 — CONTEXT AND STAKES:
 
 PARAGRAPH 2 — {home_full}:
 - About {home_full} ONLY. Stats from HOME TEAM STATS section.
+- ABSENT STAR: {home_absent_star if home_absent_star else f"NONE — no OUT player for {home_full} is significant enough to receive an absence mention. Do NOT open this paragraph with any injury context. Do NOT write 'With [player] sidelined' for any OUT player. The absence-opening sentence applies ONLY when this signal is explicitly provided."}
 - DAY-TO-DAY: {home_dtd if home_dtd else f"None — write nothing about injury status for {home_full}. Do NOT state that no players are injured or list any availability. Silence = healthy."}
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph — it is the most
   consequential fact about this team tonight. Do not bury it at the end.
-- Name the top 2-3 scorers with season PPG.
+- Name the top 2-3 scorers with season PPG. The player with the highest season PPG in HOME TEAM STATS must be named — do not skip the leading scorer.
 - RECENT FORM: weave in 1-2 sentences from the ANALYSIS block in RECENT FORM for {home_full}.
   - ATTRIBUTION RULE: before writing, identify the player named under "Offensive engine" or
     "Go-to scorer" in the {home_full} RECENT FORM block. That is the player who produced those
     scores. Use THAT name — even if a different player leads season PPG. If the form scorer and
     the season star are different people, name them separately (form scorer for recent games,
     season star for season average). Never transfer recent game scores to the season PPG leader.
+  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
+    "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
+    the engine, primary scorer, or driving force of recent scoring.
   - COLLAPSE/SURGE ARC: if present, incorporate it — use the quoted phrase or close paraphrase.
   - Open directly with "[Player] scored X against Y and Z against W." Never characterize first.
   - Never write "between X and Y points" — name each individual score.
   - Never write "over/in the last N games" with a point range.
-- NARRATIVE CONTEXT: scan the {home_full} NARRATIVE CONTEXT for any player in the ACTIVE ROSTER
-  who has an awards race mention, a franchise/season record, or a specific milestone. If found,
-  include it with the specific detail.
-  THIN RAG FALLBACK: if nothing concrete is found, a player with 3P% ≥ 40% AND 3PA ≥ 4.0 may
-  be noted as a three-point threat with exact stats only.
+- CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
+- MILESTONE: if a MILESTONE signal for {home_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph with the specific detail verbatim or close paraphrase.
 - EMERGENCY ROSTER: {home_emergency}
-- Use ONLY players in AUTHORIZED STATS ROSTER.
+- Use ONLY players in {home_full}'s AUTHORIZED STATS ROSTER. Any player from {away_full} or any other team appearing in this paragraph is a critical error.
 
 PARAGRAPH 3 — {away_full}:
 - About {away_full} ONLY. Stats from AWAY TEAM STATS section.
+- Write at least 3 sentences.
+- Name at least 2 players with their season PPG from AWAY TEAM STATS. The player with the highest season PPG must appear in the first or second sentence with their full name and PPG figure — do not skip or bury the leading scorer.
+- ABSENT STAR: {away_absent_star if away_absent_star else f"NONE — no OUT player for {away_full} is significant enough to receive an absence mention. Do NOT open this paragraph with any injury context. Do NOT write 'With [player] sidelined' for any OUT player. The absence-opening sentence applies ONLY when this signal is explicitly provided."}
 - DAY-TO-DAY: {away_dtd if away_dtd else f"None — write nothing about injury status for {away_full}. Do NOT state that no players are injured or list any availability. Silence = healthy."}
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph.
 - Name the top 2-3 scorers with season PPG.
 - RECENT FORM: same attribution and formatting rules as paragraph 2. Before writing, identify
   the player named under "Offensive engine" or "Go-to scorer" in the {away_full} RECENT FORM
   block. Use THAT name for the scoring credit — not the season PPG leader.
-- NARRATIVE CONTEXT: scan the {away_full} NARRATIVE CONTEXT for any player in the ACTIVE ROSTER
-  who has an awards race mention, a franchise/season record, or a specific milestone. If found,
-  that player MUST appear in this paragraph with the specific detail — this is not optional.
-  Ignore vague claims. Ignore players not in the active roster.
-  THIN RAG FALLBACK: if the NARRATIVE CONTEXT contains nothing concrete for any active player,
-  fall back to the stats table — a player with 3P% ≥ 40% AND 3PA ≥ 4.0 per game is worth
-  noting as a three-point threat with their exact numbers. Do not invent narrative claims;
-  limit the fallback to stats-grounded observations only.
+  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
+    "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
+    the engine, primary scorer, or driving force of recent scoring.
+- CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
+- MILESTONE: if a MILESTONE signal for {away_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph with the specific detail verbatim or close paraphrase.
 - EMERGENCY ROSTER: {away_emergency}
-- Use ONLY players in AUTHORIZED STATS ROSTER or players from ACTIVE ROSTER named in NARRATIVE CONTEXT.
+- Use ONLY players from {away_full}'s AUTHORIZED STATS ROSTER. Any player from {home_full} or any other team appearing in this paragraph is a critical error.
 
 PARAGRAPH 4 — MATCHUP ANGLE:
 - Use this pre-computed signal as your foundation — do not invent a different matchup:
   {matchup_signal if matchup_signal else "No signal computed — identify the key tension from the stats tables yourself."}
 - Build 2-3 sentences around that specific tension using player names and numbers from the tables.
-- H2H: if referencing a prior meeting, always include the actual final score and winner
-  from the H2H THIS SEASON section. Never say "won" without stating the score.
+- Do NOT reference the H2H result — it has its own dedicated section below the narrative.
 - May name players from both teams.
 - No generic language: no "key factor in determining the outcome", no abstract style descriptions.
+- NO REPETITION: each sentence must introduce a different statistic. Do not repeat any number or player name already used earlier in this paragraph.
+- CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
 
 ABSOLUTE RULES:
 1. ACTIVE ROSTER: Only name players listed in ACTIVE ROSTERS. Any player not listed has been traded or is unavailable.
-2. OUT PLAYERS: Players listed as OUT in INJURY REPORT are not playing — do not mention them as contributors.
+2. OUT PLAYERS: Players listed as OUT in INJURY REPORT are not playing tonight. If an OUT player has an ABSENT STAR signal in RECENT FORM, open that team's paragraph with exactly one sentence acknowledging their absence (e.g., "With [name] sidelined, [active scorer] has stepped up."). That is the only sentence permitted about an OUT player. Do NOT describe any OUT player as the offensive engine, a recent scorer, or a factor in tonight's game — even as context. Any OUT player not flagged as ABSENT STAR must not be mentioned at all.
 3. All numbers must match STANDINGS and team stats sections exactly.
 4. Record format: always "W-L" numerals (e.g., "46-31"). Never write records in words.
 5. Every sentence must contain at least one specific fact: player name, stat, score, or date.
-6. Narrative facts from NARRATIVE CONTEXT only — do not invent. Extraordinary claims (records, awards) require the context to state it explicitly.
+6. Extraordinary claims (records, franchise milestones, awards) require a MILESTONE signal to be present. Do not invent facts not grounded in the data sections above.
 7. Name players explicitly — never "a veteran" or "a rookie" without a name.
 8. Zero citations, zero URLs. Pure prose.
 9. PARAGRAPH OWNERSHIP: paragraph 2 = {home_full} only, paragraph 3 = {away_full} only. No cross-team player mentions in these paragraphs.
@@ -534,31 +576,12 @@ ABSOLUTE RULES:
 Write ONLY the 4 paragraphs."""
 
     print(f"[NarrativeComposer] Generating narrative ...")
-    messages = [HumanMessage(content=prompt)]
-    response = _get_llm().invoke(messages)
+    response = _get_llm().invoke([HumanMessage(content=prompt)])
     narrative = response.content.strip()
-
-    for attempt in range(2):
-        violations = _find_violations(narrative)
-        if not violations:
-            break
-        print(f"[NarrativeComposer] Banned phrases (attempt {attempt + 1}): {violations}")
-        messages = [
-            HumanMessage(content=prompt),
-            AIMessage(content=narrative),
-            HumanMessage(content=(
-                f"Your output contains these banned phrases: {', '.join(violations)}. "
-                f"Rewrite ONLY the sentences that contain them. "
-                f"Keep every other sentence identical. "
-                f"Return the full 4-paragraph output."
-            )),
-        ]
-        response = _get_llm().invoke(messages)
-        narrative = response.content.strip()
 
     violations = _find_violations(narrative)
     if violations:
-        print(f"[NarrativeComposer] WARNING — banned phrases remain after retries: {violations}")
+        print(f"[NarrativeComposer] WARNING — banned phrases detected (reviewer will handle): {violations}")
 
     print(f"[NarrativeComposer] Done ({len(narrative)} chars)")
     return {"narrative_section": narrative}

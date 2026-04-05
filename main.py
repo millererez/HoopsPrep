@@ -19,7 +19,13 @@ from core.state import GraphState
 from nodes.data_specialist import data_specialist_node
 from nodes.context_extractor import context_extractor_node
 from nodes.narrative_composer import narrative_composer_node
+from nodes.reviewer_node import reviewer_node
+from nodes.rewrite_node import rewrite_node
 from nodes.assemble_node import assemble_node
+
+
+def _route_after_review(state: GraphState) -> str:
+    return "rewrite_node" if state.get("review_issues", "").strip() else "assemble_node"
 
 
 def build_graph():
@@ -28,6 +34,8 @@ def build_graph():
     workflow.add_node("data_specialist",    data_specialist_node)
     workflow.add_node("context_extractor",  context_extractor_node)
     workflow.add_node("narrative_composer", narrative_composer_node)
+    workflow.add_node("reviewer",           reviewer_node)
+    workflow.add_node("rewrite_node",       rewrite_node)
     workflow.add_node("assemble_node",      assemble_node)
 
     # Stage 1 — parallel
@@ -38,8 +46,16 @@ def build_graph():
     workflow.add_edge("data_specialist",   "narrative_composer")
     workflow.add_edge("context_extractor", "narrative_composer")
 
-    # Stage 3
-    workflow.add_edge("narrative_composer", "assemble_node")
+    # Stage 3 — reviewer checks, routes to rewrite or directly to assemble
+    workflow.add_edge("narrative_composer", "reviewer")
+    workflow.add_conditional_edges(
+        "reviewer",
+        _route_after_review,
+        {"rewrite_node": "rewrite_node", "assemble_node": "assemble_node"},
+    )
+
+    # Stage 4 — rewrite goes directly to assemble (never back to reviewer)
+    workflow.add_edge("rewrite_node", "assemble_node")
     workflow.add_edge("assemble_node", END)
 
     return workflow.compile()
@@ -64,6 +80,7 @@ if __name__ == "__main__":
         "team_narrative_bullets": "",
         "stakes_context":         "",
         "narrative_section":      "",
+        "review_issues":          "",
         "final_report":           "",
     }
 

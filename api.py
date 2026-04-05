@@ -214,6 +214,7 @@ def post_briefing(
         "team_narrative_bullets": "",
         "stakes_context":         "",
         "narrative_section":      "",
+        "review_issues":          "",
         "final_report":           "",
     }
 
