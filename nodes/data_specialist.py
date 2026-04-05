@@ -133,9 +133,10 @@ def _analyze_form(
         gap_override = form_leader and star_name != form_leader and star_ppg - form_leader_season_ppg >= 3
 
         if dominant or gap_override:
-            bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
             star_pts = scorer_pts.get(star_name, [])
             if star_pts:
+                # Star appeared in recent games — override the form scorer
+                bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
                 star_opps = scorer_opps.get(star_name, [])
                 per_game_str = " and ".join(
                     f"{pts} pts vs {opp}" for pts, opp in zip(star_pts, star_opps)
@@ -145,19 +146,106 @@ def _analyze_form(
                     f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
                     f"{pts_clause}. Open directly: '{star_name} scored...' — no preamble or characterization."
                 )
+                if form_leader:
+                    form_pts = scorer_pts.get(form_leader, [])
+                    if form_pts and max(form_pts) >= 25 and form_leader != star_name:
+                        opp = scorer_peak_opp.get(form_leader, "")
+                        vs_str = f" against {opp}" if opp else ""
+                        bullets.append(f"  • Notable performance: {form_leader} scored {max(form_pts)} pts{vs_str}")
             else:
+                # Star didn't appear in the recent form window (e.g., injured/DTD).
+                # Keep the form scorer — they are the correct recent offensive driver.
+                # Add the star separately so the LLM knows their season role.
                 bullets.append(
-                    f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
-                    f"primary scorer. Did not lead team scoring in this sample but is the clear go-to option."
+                    f"  • Season star (not in recent form window): {star_name} ({star_ppg:.1f} PPG season). "
+                    f"Mention season average only — do NOT attribute recent game scores to this player."
                 )
-            if form_leader:
-                form_pts = scorer_pts.get(form_leader, [])
-                if form_pts and max(form_pts) >= 25 and form_leader != star_name:
-                    opp = scorer_peak_opp.get(form_leader, "")
-                    vs_str = f" against {opp}" if opp else ""
-                    bullets.append(f"  • Notable performance: {form_leader} scored {max(form_pts)} pts{vs_str}")
 
     return "\n".join(bullets)
+
+
+# ---------------------------------------------------------------------------
+# Stakes context
+# ---------------------------------------------------------------------------
+
+def _compute_stakes_context(
+    full_name: str,
+    seed: int,
+    conf: str,
+    wins: int,
+    losses: int,
+    standings: dict,
+) -> str:
+    """
+    Compute a grounded stakes string for one team.
+    Reports every meaningful boundary within games_remaining distance — both
+    upside (can reach) and risk (can slip to). Uses correct NBA play-in rules.
+    """
+    games_remaining = 82 - wins - losses
+    if games_remaining <= 0 or seed <= 0:
+        return f"{full_name}: no games remaining"
+
+    # Seed → (wins, losses) for same conference
+    conf_seed_map: dict[int, tuple[int, int]] = {}
+    for d in standings.values():
+        if d.get("conf") == conf:
+            s = d.get("conf_seed", 0)
+            if s > 0:
+                conf_seed_map[s] = (d.get("wins", 0), d.get("losses", 0))
+
+    def gb_from(target: int) -> float | None:
+        """Positive = target is above us. Negative = target is below us."""
+        if target not in conf_seed_map or target == seed:
+            return None
+        tw, tl = conf_seed_map[target]
+        return ((tw - wins) + (losses - tl)) / 2
+
+    # Current position label — using correct play-in rules
+    if seed <= 4:
+        pos_label = f"direct playoff #{seed} (home court)"
+    elif seed <= 6:
+        pos_label = f"direct playoff #{seed} (no home court)"
+    elif seed == 7:
+        pos_label = "play-in #7 — hosts 7/8 game; guaranteed two chances"
+    elif seed == 8:
+        pos_label = "play-in #8 — win vs #7 = straight to playoffs as 7-seed; lose = host winner of 9/10 for 8-seed"
+    elif seed == 9:
+        pos_label = "play-in #9 — must win 9/10 game; winner plays loser of 7/8 for 8-seed"
+    elif seed == 10:
+        pos_label = "play-in #10 — must win 9/10 or immediately eliminated"
+    else:
+        pos_label = f"#{seed} — eliminated from playoff contention"
+
+    # Meaningful boundary seeds and what crossing them means
+    BOUNDARIES: dict[int, str] = {
+        4:  "home court in first round",
+        6:  "direct playoff berth",
+        7:  "play-in double-chance (hosts 7/8, guaranteed two attempts)",
+        8:  "play-in with second chance if first game lost",
+        9:  "play-in must-win first game",
+        10: "play-in last chance (lose = immediately eliminated)",
+    }
+
+    reachable: list[str] = []
+    at_risk:   list[str] = []
+
+    for target_seed in sorted(BOUNDARIES.keys()):
+        if target_seed == seed:
+            continue
+        gb = gb_from(target_seed)
+        if gb is None:
+            continue
+        if 0 < gb <= games_remaining:
+            reachable.append(f"{gb:.1f} back of #{target_seed} — {BOUNDARIES[target_seed]}")
+        elif -games_remaining <= gb < 0:
+            at_risk.append(f"{abs(gb):.1f} ahead of #{target_seed} — {BOUNDARIES[target_seed]}")
+
+    result = f"{full_name}: {pos_label} | {games_remaining} games remaining"
+    if reachable:
+        result += " | UPSIDE: " + "; ".join(reachable)
+    if at_risk:
+        result += " | RISK: " + "; ".join(at_risk)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -267,15 +355,15 @@ def data_specialist_node(state: GraphState) -> dict:
             f"### {full_name}",
             f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}{availability}",
             f"Team Stats: {ppg_str} | {def_str}",
-            "| Player | MIN | PPG | FG% | 3P% | FT% | RPG | APG | STL | BLK | TOV |",
-            "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
+            "| Player | MIN | PPG | FGA | FG% | 3PA | 3P% | FTA | FT% | RPG | APG | STL | BLK | TOV |",
+            "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
         ]
         if roster:
             for p in roster:
                 rows.append(
-                    f"| {p['name']} | {p['mins']} | {p['ppg']} | {p['fg_pct']} "
-                    f"| {p['tpp']} | {p['ft_pct']} | {p['rpg']} | {p['apg']} "
-                    f"| {p['stl']} | {p['blk']} | {p['tov']} |"
+                    f"| {p['name']} | {p['mins']} | {p['ppg']} | {p['fga']} | {p['fg_pct']} "
+                    f"| {p['tpa']} | {p['tpp']} | {p['fta']} | {p['ft_pct']} "
+                    f"| {p['rpg']} | {p['apg']} | {p['stl']} | {p['blk']} | {p['tov']} |"
                 )
         else:
             rows.append("| Stats unavailable | — | — | — | — | — |")
@@ -363,9 +451,24 @@ def data_specialist_node(state: GraphState) -> dict:
 
     recent_form = "\n\n".join(form_parts)
 
+    # ── Compute stakes context for both teams ────────────────────────────────
+    stakes_parts = []
+    for full_name, _, espn_id in teams:
+        info = standings.get(espn_id, {})
+        stakes_parts.append(_compute_stakes_context(
+            full_name  = full_name,
+            seed       = info.get("conf_seed", 0),
+            conf       = info.get("conf", ""),
+            wins       = info.get("wins", 0),
+            losses     = info.get("losses", 0),
+            standings  = standings,
+        ))
+    stakes_context = "\n".join(stakes_parts)
+
     return {
         "player_stats_table": "\n\n".join(sections),
         "h2h_summary":        h2h_text,
         "injury_summary":     injury_summary,
         "recent_form":        recent_form,
+        "stakes_context":     stakes_context,
     }

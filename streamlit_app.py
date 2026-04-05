@@ -36,22 +36,12 @@ def fetch_briefing(game_id: str) -> dict:
     return resp.json()
 
 
-def parse_report(report: str) -> tuple[str, str, str, str, str]:
-    """Split report into (prose, storylines, injury_block, h2h_block, stats_block)."""
-    # Storylines block (optional)
-    if "\n\nStorylines:\n\n" in report:
-        prose, rest = report.split("\n\nStorylines:\n\n", 1)
+def parse_report(report: str) -> tuple[str, str, str, str]:
+    """Split report into (narrative, injury_block, h2h_block, stats_block)."""
+    if "\n\nInjury Report:\n\n" in report:
+        narrative, rest = report.split("\n\nInjury Report:\n\n", 1)
     else:
-        prose, rest = report, ""
-
-    if "\n\nInjury Report:\n\n" in rest:
-        storylines, rest = rest.split("\n\nInjury Report:\n\n", 1)
-    elif "\n\nInjury Report:\n\n" in prose:
-        # No storylines — prose contains everything up to injury
-        prose, rest = prose.split("\n\nInjury Report:\n\n", 1)
-        storylines = ""
-    else:
-        return prose, rest, "", "", ""
+        return report, "", "", ""
 
     if "\n\nH2H This Season:\n\n" in rest:
         injury_block, rest = rest.split("\n\nH2H This Season:\n\n", 1)
@@ -61,7 +51,7 @@ def parse_report(report: str) -> tuple[str, str, str, str, str]:
     parts = rest.split("\n\n### ", 1)
     h2h_block   = parts[0]
     stats_block = ("### " + parts[1]) if len(parts) > 1 else ""
-    return prose, storylines, injury_block, h2h_block, stats_block
+    return narrative, injury_block, h2h_block, stats_block
 
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -118,19 +108,13 @@ if st.button("Generate Briefing", type="primary"):
 
 if "report_data" in st.session_state:
     data = st.session_state.report_data
-    prose, storylines, injury_block, h2h_block, stats_block = parse_report(data["report"])
+    narrative, injury_block, h2h_block, stats_block = parse_report(data["report"])
 
     st.divider()
     st.subheader(f"{data['away_team']} @ {data['home_team']}")
 
-    # Prose paragraphs
-    st.markdown(prose)
-
-    # Storylines
-    if storylines:
-        st.divider()
-        st.markdown("**Storylines**")
-        st.markdown(storylines)
+    # Narrative
+    st.markdown(narrative)
 
     # Injury report
     if injury_block:

@@ -88,7 +88,9 @@ def build_player_lookup() -> list[dict]:
             mins   = cats[0]["totals"][1]
             rpg    = cats[0]["totals"][11]
             ppg    = cats[1]["totals"][0]
+            fga    = cats[1]["totals"][2]
             fg_pct = cats[1]["totals"][3]
+            tpa    = cats[1]["totals"][5]
             tpp    = cats[1]["totals"][6]
             apg    = cats[1]["totals"][7]
             ft_pct = cats[1]["totals"][9]
@@ -97,13 +99,20 @@ def build_player_lookup() -> list[dict]:
             blk    = cats[2]["totals"][1]
         except (IndexError, KeyError):
             continue
+        # FTA index is uncertain — fetch separately so a wrong index doesn't drop the player
+        try:
+            fta = cats[1]["totals"][10]
+        except (IndexError, KeyError):
+            fta = "—"
         if gp < _MIN_GAMES:
             continue
         players.append({
             "name":    athlete.get("displayName", "Unknown"),
             "team_id": athlete.get("teamId", ""),
-            "mins": mins, "ppg": ppg, "fg_pct": fg_pct,
-            "tpp": tpp, "ft_pct": ft_pct,
+            "mins": mins, "ppg": ppg,
+            "fga": fga, "fg_pct": fg_pct,
+            "tpa": tpa, "tpp": tpp,
+            "fta": fta, "ft_pct": ft_pct,
             "rpg": rpg, "apg": apg,
             "stl": stl, "blk": blk, "tov": tov,
         })

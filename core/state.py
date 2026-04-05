@@ -27,8 +27,8 @@ class GraphState(TypedDict):
     injury_summary: str          # ESPN API: current injury list per team
     recent_form: str             # ESPN API: top scorer from each of last 3 games per team
     team_narrative_bullets: str  # Tavily ingestion status (logging only)
-    prose_section: str           # LLM prose — 2 team paragraphs
-    storylines_section: str      # RAG — 3 storyline bullets
+    stakes_context: str          # computed: seed consequences + games back/ahead for both teams
+    narrative_section: str       # LLM — 4-paragraph unified narrative
     final_report: str
 
 # ---------------------------------------------------------------------------

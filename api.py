@@ -212,8 +212,8 @@ def post_briefing(
         "injury_summary":         "",
         "recent_form":            "",
         "team_narrative_bullets": "",
-        "prose_section":          "",
-        "storylines_section":     "",
+        "stakes_context":         "",
+        "narrative_section":      "",
         "final_report":           "",
     }
 

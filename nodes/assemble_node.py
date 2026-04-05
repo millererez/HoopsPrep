@@ -63,8 +63,7 @@ def _h2h_prose(raw: str) -> str:
 
 
 def assemble_node(state: GraphState) -> dict:
-    prose       = state.get("prose_section", "")
-    storylines  = state.get("storylines_section", "")
+    narrative   = state.get("narrative_section", "")
     injury_sum  = state.get("injury_summary", "")
     h2h_raw     = state.get("h2h_summary", "")
     table       = state.get("player_stats_table", "")
@@ -76,11 +75,6 @@ def assemble_node(state: GraphState) -> dict:
         home_full, away_full = home_team[0], away_team[0]
     else:
         home_full = away_full = ""
-
-    # Storylines block
-    storylines_block = ""
-    if storylines:
-        storylines_block = "Storylines:\n\n" + storylines
 
     # Injury block
     if home_full and away_full:
@@ -95,11 +89,7 @@ def assemble_node(state: GraphState) -> dict:
     # H2H block
     h2h_block = "H2H This Season:\n\n" + (_h2h_prose(h2h_raw) if h2h_raw else "No completed H2H games this season.")
 
-    parts = [prose]
-    if storylines_block:
-        parts.append(storylines_block)
-    parts.append(injury_block)
-    parts.append(h2h_block)
+    parts = [narrative, injury_block, h2h_block]
     if table:
         parts.append(table)
 
