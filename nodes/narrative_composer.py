@@ -45,6 +45,19 @@ _NUM_WORDS = {
 }
 
 
+def _record_seed_str(table: str, team_name: str) -> str:
+    """Return 'W-L, #X East/West' for use in the opener sentence."""
+    m = _re.search(
+        rf"### {_re.escape(team_name)}.*?Record: W (\d+) / L (\d+) \| Seed: ([^|]+)\|",
+        table, _re.DOTALL
+    )
+    if not m:
+        return ""
+    wins, losses, seed = m.groups()
+    seed = seed.strip().replace(" Conference", "").replace(" Eastern", " East").replace(" Western", " West")
+    return f"{wins}-{losses}, {seed}"
+
+
 def _momentum_summary(table: str, team_name: str) -> str:
     m = _re.search(
         rf"### {_re.escape(team_name)}.*?Record: W (\d+) / L (\d+) \| Seed: ([^|]+)\| Streak: (\S+) \| Last 10: ([\d-]+)",
@@ -195,7 +208,7 @@ def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
                     player_ppg.append((name, ppg))
                 except ValueError:
                     pass
-    top3 = {name for name, _ in sorted(player_ppg, key=lambda x: -x[1])[:3]}
+    top3 = {name for name, _ in sorted(player_ppg, key=lambda x: -x[1])[:2]}
     qualified_names = {name for name, _ in player_ppg}
 
     dtd: list[str] = []
@@ -210,7 +223,7 @@ def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
             m = _re.match(r"\s*•\s*(.+?)\s*\u2014", line)
             if m:
                 name = m.group(1)
-                if name in top3 or name not in qualified_names:
+                if name in top3:
                     dtd.append(name)
 
     if not dtd:
@@ -297,6 +310,25 @@ def _absent_star_signal(team_name: str, recent_form: str) -> str:
     return ""
 
 
+def _extract_verbatim_sentence(team_name: str, recent_form: str) -> str:
+    """
+    Extract the exact quoted sentence from the VERBATIM OPENING SENTENCE or
+    INCLUDE THIS SENTENCE VERBATIM line in the team's recent form block.
+    Returns the raw quoted text (without surrounding quotes), or "" if not found.
+    """
+    import re as re2
+    pattern = rf"### {re2.escape(team_name)}.*?(?=\n###|\Z)"
+    m = re2.search(pattern, recent_form, re2.DOTALL)
+    if not m:
+        return ""
+    for line in m.group(0).splitlines():
+        if "VERBATIM OPENING SENTENCE" in line or "INCLUDE THIS SENTENCE VERBATIM" in line:
+            q = re2.search(r"'([^']+)'", line)
+            if q:
+                return q.group(1)
+    return ""
+
+
 def _retrieve(team_name: str, today: str) -> str:
     try:
         results = get_collection().query(
@@ -348,8 +380,14 @@ def narrative_composer_node(state: GraphState) -> dict:
     signals          = _game_signals(home_full, away_full, table, h2h_summary, injury_summary)
     home_roster      = _active_roster(table, home_full)
     away_roster      = _active_roster(table, away_full)
-    home_streak    = _streak_text(home_stats)
-    away_streak    = _streak_text(away_stats)
+    home_streak      = _streak_text(home_stats)
+    away_streak      = _streak_text(away_stats)
+    home_record_seed = _record_seed_str(table, home_full) or home_full
+    away_record_seed = _record_seed_str(table, away_full) or away_full
+    home_short       = home_full.split()[-1]
+    away_short       = away_full.split()[-1]
+    print(f"[NarrativeComposer] home_record_seed: {home_record_seed}")
+    print(f"[NarrativeComposer] away_record_seed: {away_record_seed}")
     home_emergency = _emergency_note(home_stats, home_full)
     away_emergency = _emergency_note(away_stats, away_full)
     home_dtd       = _dtd_stars(home_stats, injury_summary, home_full)
@@ -366,8 +404,12 @@ def narrative_composer_node(state: GraphState) -> dict:
     away_milestone   = _narrative_milestone(away_ctx, away_roster)
     home_absent_star = _absent_star_signal(home_full, recent_form)
     away_absent_star = _absent_star_signal(away_full, recent_form)
+    home_verbatim    = _extract_verbatim_sentence(home_full, recent_form)
+    away_verbatim    = _extract_verbatim_sentence(away_full, recent_form)
     print(f"[NarrativeComposer] Home milestone: {home_milestone or 'none'}")
     print(f"[NarrativeComposer] Away milestone: {away_milestone or 'none'}")
+    print(f"[NarrativeComposer] Home verbatim: {home_verbatim or 'none'}")
+    print(f"[NarrativeComposer] Away verbatim: {away_verbatim or 'none'}")
 
     prompt = f"""You are a professional NBA analyst writing a pre-game briefing for fans.
 Write in clear, factual prose — specific and grounded, not hype.
@@ -403,6 +445,10 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 ─── AUTHORIZED STATS ROSTER (performance/stats mentions only) ───
 {roster_allowlist}
 
+CRITICAL: Do NOT mention any player by name unless they appear in the lists above.
+If your training data says a player is on one of these teams but they are NOT in these lists,
+they have been traded, waived, or released — do NOT mention them under any circumstances.
+
 ─── INJURY REPORT (ESPN API) ───
 {injury_summary}
 
@@ -418,23 +464,30 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 Write EXACTLY 3 paragraphs, blank line between them. No headers. Do NOT write an injury section.
 
 PARAGRAPH 1 — CONTEXT AND STAKES:
-- Open with {home_full}'s record, their recent stretch, and where they stand with games remaining.
-- Bring in {away_full}: their record, streak, and what's at stake for them (play-in pressure, games left).
-- Use GAME CONTEXT SIGNALS where relevant: streak collision, H2H rematch frame, playoff implications.
+Write exactly 4 sentences, in this order — no more, no fewer:
+  Sentence 1 (opener): Use this exact format —
+    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
+    Nothing else in this sentence. No stakes summary here — records and seeds only.
+  Sentence 2 ({home_full} stakes): Start with "{home_short}" (not "They", not the full name).
+    Include: streak, games remaining, and the most urgent games-back number from STAKES CONTEXT.
+    PRIORITY: if STAKES CONTEXT lists a RISK number for {home_full}, use that — it is more
+    urgent than UPSIDE. Use UPSIDE only if no RISK exists.
+    One sentence — do NOT mention {home_full}'s games-back situation again after this.
+  Sentence 3 ({away_full} stakes): Start with "{away_short}" (not "They", not the full name).
+    Same structure as sentence 2 but for {away_full}.
+    PRIORITY: use the RISK number from STAKES CONTEXT if one exists for {away_full}.
+    One sentence — do NOT mention {away_full}'s games-back situation again after this.
+  Sentence 4 (game frame): one sentence using GAME CONTEXT SIGNALS — streak collision, H2H
+    rematch, or playoff pressure angle. No new stakes numbers.
+
+Rules for all 4 sentences:
 - STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
 - All records and seeds must match STANDINGS exactly.
-- CRITICAL: use STAKES CONTEXT to state specific consequences — games back, what each position
-  means, what is and isn't within reach. Do NOT invent any games-back numbers — use only what
-  STAKES CONTEXT provides. Do NOT use effort/desire framing ("striving to", "vying for", etc.).
-- REQUIRED: include at least one specific games-back number for EACH team from STAKES CONTEXT.
-  A team's playoff situation described with no games-back number is an automatic error.
+- Use STAKES CONTEXT for all games-back numbers — do NOT invent any.
+- Do NOT use effort/desire framing ("striving to", "vying for", "looking to", etc.).
 - POSITION LABELS: use the exact label from STAKES CONTEXT — "play-in #7", "play-in #8",
-  "direct playoff #6", etc. Do NOT simplify play-in positions to "playoff spot" or "playoffs" —
-  play-in is not a guaranteed playoff berth. Only say "direct playoff berth" if the label says
-  "direct playoff".
-- NO PREAMBLE: Do NOT open with a generic setup sentence ("The stakes are high...", "In a pivotal
-  matchup...", "Tonight's game...", "As the season winds down..."). Start directly with {home_full}'s
-  record and situation — that IS the opening.
+  "direct playoff #6", etc. Do NOT simplify play-in to "playoff spot" or "playoffs".
+  Only say "clinched" if the STAKES CONTEXT label says "clinched".
 - This is the only paragraph that may reference both teams together.
 
 PARAGRAPH 2 — {home_full}:
@@ -444,25 +497,22 @@ PARAGRAPH 2 — {home_full}:
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph — it is the most
   consequential fact about this team tonight. Do not bury it at the end.
 - Name the top 2-3 scorers with season PPG. The player with the highest season PPG in HOME TEAM STATS must be named — do not skip the leading scorer.
-- RECENT FORM ATTRIBUTION (do this before writing a single word):
-  0. PRE-FLIGHT: Before writing paragraph 2, write down (mentally) the exact text of the
-     VERBATIM OPENING SENTENCE from the {home_full} RECENT FORM block. That sentence must
-     appear word-for-word as the first sentence of this paragraph. If it says "Player A scored
-     X against Y", your paragraph opens with "Player A scored X against Y." — even if another
-     player had stronger recent games by your own judgment.
-  1. Find the line starting with "Offensive engine:" or "Go-to scorer:" in the {home_full} RECENT FORM block.
-  2. Read the player name on that line. That is the ONLY player who may be credited with recent game scores.
-  3. Find the line starting with "VERBATIM OPENING SENTENCE" in that same block. Copy it exactly — do not change the player name, do not substitute any other name.
-  4. If the form scorer and the season star are different people, name them separately (form scorer for recent games, season star for season average).
-  Any player name substitution is a critical error that will be rejected.
-  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
-    "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
-    the engine, primary scorer, or driving force of recent scoring.
+- LEADING SCORER LABEL: the phrase "leading scorer" or "team's top scorer" must refer to the player with the HIGHEST PPG in HOME TEAM STATS — never to the player in the opening sentence unless they are also the PPG leader in the table.
+- REQUIRED OPENING SENTENCE — copy this word-for-word as the very first sentence of this paragraph:
+  "{home_verbatim if home_verbatim else f'[No verbatim sentence — open with the top scorer from {home_full} RECENT FORM block and their recent scores.]'}"
+  Do NOT change the player name. Do NOT rephrase. Do NOT substitute any other player's name.
+  This sentence was computed by Python from live ESPN data and is authoritative.
+- RECENT FORM ATTRIBUTION:
+  - The player named in the required opening sentence above is the ONLY player who may be
+    credited with recent game scores in this paragraph.
+  - If the form scorer and the season star are different people, name them separately (form
+    scorer for recent games, season star for season average).
+  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team. Do not describe any
+    other player as the engine, primary scorer, or driving force of recent scoring.
   - DO NOT invent or add "averaging X PPG this season" for any player unless the RECENT FORM
     bullet explicitly includes a PPG figure (e.g., "Offensive engine: OG Anunoby (26 PPG season)").
     If no PPG appears in the bullet, do not add a season average for that player.
-  - COLLAPSE/SURGE ARC: if present, incorporate it — use the quoted phrase or close paraphrase.
-  - Open directly with "[Player] scored X against Y and Z against W." Never characterize first.
+  - COLLAPSE/SURGE ARC: if present in RECENT FORM, incorporate it — use the quoted phrase or close paraphrase.
   - Never write "between X and Y points" — name each individual score.
   - Never write "over/in the last N games" with a point range.
 - CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
@@ -478,20 +528,18 @@ PARAGRAPH 3 — {away_full}:
 - DAY-TO-DAY: {away_dtd if away_dtd else f"None — write nothing about injury status for {away_full}. Do NOT state that no players are injured or list any availability. Silence = healthy."}
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph.
 - Name the top 2-3 scorers with season PPG.
-- RECENT FORM ATTRIBUTION (do this before writing a single word):
-  0. PRE-FLIGHT: Before writing paragraph 3, write down (mentally) the exact text of the
-     VERBATIM OPENING SENTENCE from the {away_full} RECENT FORM block. That sentence must
-     appear word-for-word as the first sentence of this paragraph. If it says "Player A scored
-     X against Y", your paragraph opens with "Player A scored X against Y." — even if another
-     player had stronger recent games by your own judgment.
-  1. Find the line starting with "Offensive engine:" or "Go-to scorer:" in the {away_full} RECENT FORM block.
-  2. Read the player name on that line. That is the ONLY player who may be credited with recent game scores.
-  3. Find the line starting with "VERBATIM OPENING SENTENCE" in that same block. Copy it exactly — do not change the player name, do not substitute any other name.
-  4. If you cannot find a VERBATIM OPENING SENTENCE, use the engine/scorer's name from step 2.
-  Any player name substitution (e.g., writing "Jrue Holiday" when the engine is "Deni Avdija") is a critical error that will be rejected.
-  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
-    "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
-    the engine, primary scorer, or driving force of recent scoring.
+- LEADING SCORER LABEL: the phrase "leading scorer" or "team's top scorer" must refer to the player with the HIGHEST PPG in AWAY TEAM STATS — never to the player in the opening sentence unless they are also the PPG leader in the table.
+- REQUIRED OPENING SENTENCE — copy this word-for-word as the very first sentence of this paragraph:
+  "{away_verbatim if away_verbatim else f'[No verbatim sentence — open with the top scorer from {away_full} RECENT FORM block and their recent scores.]'}"
+  Do NOT change the player name. Do NOT rephrase. Do NOT substitute any other player's name.
+  This sentence was computed by Python from live ESPN data and is authoritative.
+- RECENT FORM ATTRIBUTION:
+  - The player named in the required opening sentence above is the ONLY player who may be
+    credited with recent game scores in this paragraph.
+  - If the form scorer and the season star are different people, name them separately (form
+    scorer for recent games, season star for season average).
+  - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team. Do not describe any
+    other player as the engine, primary scorer, or driving force of recent scoring.
   - DO NOT invent or add "averaging X PPG this season" for any player unless the RECENT FORM
     bullet explicitly includes a PPG figure (e.g., "Offensive engine: OG Anunoby (26 PPG season)").
     If no PPG appears in the bullet, do not add a season average for that player.

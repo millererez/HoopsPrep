@@ -186,6 +186,20 @@ No other text. No PASS lines. Only issues or APPROVED."""
             filtered.append(line)
         llm_output = "\n".join(filtered).strip() or "APPROVED"
 
+    # Python-guard: drop ISSUE 4 lines where the flagged sentence contains no specific
+    # game score (e.g. "scored X against Y"). Season PPG averages are NOT attribution errors.
+    import re as _re3
+    if llm_output != "APPROVED":
+        filtered4: list[str] = []
+        for line in llm_output.splitlines():
+            if _re3.match(r'\s*ISSUE\s+(CHECK\s+)?4\s*:', line, _re3.IGNORECASE):
+                # Keep only if the quoted sentence contains a specific game score pattern
+                if not _re3.search(r'scored\s+\d+|(\d+)\s+points?\s+(against|vs)', line, _re3.IGNORECASE):
+                    print(f"[Reviewer]  Dropping false CHECK 4 (no game score in sentence): {line.strip()}")
+                    continue
+            filtered4.append(line)
+        llm_output = "\n".join(filtered4).strip() or "APPROVED"
+
     if llm_output == "APPROVED" and not python_issues:
         print("[Reviewer]  APPROVED — no issues found")
         return {"review_issues": ""}

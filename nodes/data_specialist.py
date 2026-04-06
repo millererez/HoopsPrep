@@ -249,6 +249,11 @@ def _compute_stakes_context(
     if games_remaining <= 0 or seed <= 0:
         return f"{full_name}: no games remaining"
 
+    # Eliminated teams (seed 11+): no meaningful boundaries to report.
+    # Avoids contradicting the "eliminated" label with reachable play-in distances.
+    if seed > 10:
+        return f"{full_name}: #{seed} — eliminated from playoff contention | {games_remaining} games remaining"
+
     # Seed → (wins, losses) for same conference
     conf_seed_map: dict[int, tuple[int, int]] = {}
     for d in standings.values():
@@ -264,21 +269,14 @@ def _compute_stakes_context(
         tw, tl = conf_seed_map[target]
         return ((tw - wins) + (losses - tl)) / 2
 
-    # Current position label — using correct play-in rules
-    if seed <= 4:
-        pos_label = f"direct playoff #{seed} (home court)"
-    elif seed <= 6:
-        pos_label = f"direct playoff #{seed} (no home court)"
-    elif seed == 7:
-        pos_label = "play-in #7 — hosts 7/8 game; guaranteed two chances"
-    elif seed == 8:
-        pos_label = "play-in #8 — win vs #7 = straight to playoffs as 7-seed; lose = host winner of 9/10 for 8-seed"
-    elif seed == 9:
-        pos_label = "play-in #9 — must win 9/10 game; winner plays loser of 7/8 for 8-seed"
-    elif seed == 10:
-        pos_label = "play-in #10 — must win 9/10 or immediately eliminated"
-    else:
-        pos_label = f"#{seed} — eliminated from playoff contention"
+    def _playoff_tier(s: int) -> int:
+        """0 = home court (1-4), 1 = direct playoff (5-6), 2 = play-in (7-10), 3 = eliminated."""
+        if s <= 4:  return 0
+        if s <= 6:  return 1
+        if s <= 10: return 2
+        return 3
+
+    current_tier = _playoff_tier(seed)
 
     # Meaningful boundary seeds and what crossing them means
     BOUNDARIES: dict[int, str] = {
@@ -290,6 +288,44 @@ def _compute_stakes_context(
         9:  "play-in must-win first game",
         10: "play-in last chance (lose = immediately eliminated)",
     }
+
+    # Determine if current tier is mathematically clinched:
+    # clinched = team leads EVERY immediate lower-tier boundary by more than games_remaining.
+    lower_tier_leads: list[float] = []
+    for _ts in BOUNDARIES:
+        if _ts == seed:
+            continue
+        _gb = gb_from(_ts)
+        if _gb is None:
+            continue
+        _tt = _playoff_tier(_ts)
+        if _tt != current_tier + 1:
+            continue          # only check the immediate next-worse tier
+        if _gb < 0:           # team is ahead of this boundary
+            lower_tier_leads.append(abs(_gb))
+    clinched = bool(lower_tier_leads) and all(lead > games_remaining for lead in lower_tier_leads)
+
+    # Current position label — using correct play-in rules
+    if seed <= 4:
+        if clinched:
+            pos_label = f"#{seed} — clinched home-court playoff position"
+        else:
+            pos_label = f"#{seed} — currently holding home-court position (not yet clinched)"
+    elif seed <= 6:
+        if clinched:
+            pos_label = f"#{seed} — clinched direct playoff berth (no home court)"
+        else:
+            pos_label = f"#{seed} — currently in direct playoff position, not yet clinched"
+    elif seed == 7:
+        pos_label = "play-in #7 — hosts 7/8 game; guaranteed two chances"
+    elif seed == 8:
+        pos_label = "play-in #8 — win vs #7 = straight to playoffs as 7-seed; lose = host winner of 9/10 for 8-seed"
+    elif seed == 9:
+        pos_label = "play-in #9 — must win 9/10 game; winner plays loser of 7/8 for 8-seed"
+    elif seed == 10:
+        pos_label = "play-in #10 — must win 9/10 or immediately eliminated"
+    else:
+        pos_label = f"#{seed} — eliminated from playoff contention"
 
     reachable: list[str] = []
     at_risk:   list[str] = []
@@ -303,14 +339,13 @@ def _compute_stakes_context(
         if 0 < gb <= games_remaining:
             reachable.append(f"{fmt_num(gb)} back of #{target_seed} — {BOUNDARIES[target_seed]}")
         elif -games_remaining <= gb < 0:
-            # Skip same-tier boundaries — crossing them doesn't change the playoff outcome:
-            #   • #4 as risk for seeds 1-4: all have home court, falling within that range changes
-            #     seeding but not home-court status. Meaningful risk is #5 (losing home court).
-            #   • #6 as risk for seeds 1-6: both #5 and #6 are direct playoff (no home court).
-            #     Meaningful risk is #7 (play-in).
-            if target_seed == 4 and seed <= 4:
+            target_tier = _playoff_tier(target_seed)
+            # Skip same-tier risk: falling within the same tier changes seeding but not status.
+            if target_tier == current_tier:
                 continue
-            if target_seed == 6 and seed <= 6:
+            # Skip multi-tier risk: you can't reach #7 without first passing #5.
+            # Only show the immediately next tier down (current_tier + 1).
+            if target_tier > current_tier + 1:
                 continue
             at_risk.append(f"{fmt_num(abs(gb))} ahead of #{target_seed} — {BOUNDARIES[target_seed]}")
 
@@ -436,6 +471,7 @@ def data_specialist_node(state: GraphState) -> dict:
         rows = [
             f"### {full_name}",
             f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}{availability}",
+            f"",
             f"Team Stats: {ppg_str} | {def_str}",
             "| Player | MIN | PPG | FGA | FG% | 3PA | 3P% | FTA | FT% | RPG | APG | STL | BLK | TOV |",
             "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
