@@ -3,7 +3,7 @@ nodes/narrative_composer.py
 ───────────────────────────
 Node 2 — Narrative Composer.
 Replaces report_composer + storylines_composer.
-Writes a 4-paragraph unified narrative using ESPN data + ChromaDB RAG context.
+Writes a 3-paragraph unified narrative using ESPN data + ChromaDB RAG context.
 Runs after both data_specialist and context_extractor complete.
 """
 
@@ -225,75 +225,6 @@ def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
     )
 
 
-def _matchup_signal(home_full: str, away_full: str, table: str) -> str:
-    """
-    Pre-compute the key tactical tension for para 4.
-    Columns: Player | MIN | PPG | FG% | 3P% | FT% | RPG | APG | STL | BLK | TOV
-    Indices after split by |: 1=Player 2=MIN 3=PPG 4=FG% 5=3P% 6=FT% 7=RPG 8=APG 9=STL 10=BLK 11=TOV
-    """
-    def _parse_players(team_name: str) -> list[dict]:
-        # New table columns: Player(1) MIN(2) PPG(3) FGA(4) FG%(5) 3PA(6) 3P%(7) FTA(8) FT%(9) RPG(10) APG(11) STL(12) BLK(13) TOV(14)
-        section = _extract_team_section(table, team_name)
-        players = []
-        in_table = False
-        for line in section.splitlines():
-            if line.startswith("| Player"):
-                in_table = True
-                continue
-            if in_table and line.startswith("| ") and "---" not in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 15:
-                    try:
-                        players.append({
-                            "name": parts[1],
-                            "mins": float(parts[2]),
-                            "ppg":  float(parts[3]),
-                            "tpa":  float(parts[6]),
-                            "tpp":  float(parts[7]),
-                            "rpg":  float(parts[10]),
-                            "apg":  float(parts[11]),
-                            "blk":  float(parts[13]),
-                        })
-                    except (ValueError, IndexError):
-                        pass
-        return players
-
-    away_players = _parse_players(away_full)
-    home_players = _parse_players(home_full)
-    if not away_players or not home_players:
-        return ""
-
-    # Away team's best 3P threat (20+ MIN, 35%+ from three, 1.5+ 3PA as volume filter)
-    shooters = [p for p in away_players if p["mins"] >= 20 and p["tpp"] >= 35.0 and p["tpa"] >= 1.5]
-    best_shooter = max(shooters, key=lambda p: p["tpp"]) if shooters else None
-
-    # Home team's paint anchor (highest BLK, 20+ MIN)
-    anchors = [p for p in home_players if p["mins"] >= 20]
-    paint_anchor = max(anchors, key=lambda p: p["blk"]) if anchors else None
-
-    if best_shooter and paint_anchor and paint_anchor["blk"] >= 1.5:
-        return (
-            f"MATCHUP ANCHOR: {best_shooter['name']} ({away_full}) shoots {best_shooter['tpp']}% "
-            f"from three ({best_shooter['ppg']} PPG). {paint_anchor['name']} ({home_full}) averages "
-            f"{paint_anchor['blk']} blocks per game. Use this perimeter-vs-paint tension as the "
-            f"foundation for paragraph 4: whether {away_full}'s shooters can pull {paint_anchor['name']} "
-            f"from the paint determines spacing for both offenses."
-        )
-
-    # Fallback: top scorer vs top scorer — enrich with multiple stats to prevent repetition
-    away_star = max(away_players, key=lambda p: p["ppg"]) if away_players else None
-    home_star = max(home_players, key=lambda p: p["ppg"]) if home_players else None
-    if away_star and home_star:
-        return (
-            f"MATCHUP ANCHOR: {away_star['name']} ({away_full}) — {away_star['ppg']} PPG, "
-            f"{away_star['tpp']}% from three, {away_star['rpg']} RPG. "
-            f"{home_star['name']} ({home_full}) — {home_star['ppg']} PPG, "
-            f"{home_star['tpp']}% from three, {home_star['rpg']} RPG. "
-            f"Frame paragraph 4 around this duel. Use a DIFFERENT stat in each sentence — "
-            f"do not repeat any number already used in this paragraph."
-        )
-    return ""
-
 
 def _narrative_milestone(ctx: str, roster: list[str]) -> str:
     """
@@ -415,7 +346,6 @@ def narrative_composer_node(state: GraphState) -> dict:
     home_momentum    = _momentum_summary(table, home_full)
     away_momentum    = _momentum_summary(table, away_full)
     signals          = _game_signals(home_full, away_full, table, h2h_summary, injury_summary)
-    matchup_signal   = _matchup_signal(home_full, away_full, table)
     home_roster      = _active_roster(table, home_full)
     away_roster      = _active_roster(table, away_full)
     home_streak    = _streak_text(home_stats)
@@ -485,7 +415,7 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 
 ═══════════ OUTPUT ═══════════
 
-Write EXACTLY 4 paragraphs, blank line between them. No headers. Do NOT write an injury section.
+Write EXACTLY 3 paragraphs, blank line between them. No headers. Do NOT write an injury section.
 
 PARAGRAPH 1 — CONTEXT AND STAKES:
 - Open with {home_full}'s record, their recent stretch, and where they stand with games remaining.
@@ -514,15 +444,23 @@ PARAGRAPH 2 — {home_full}:
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph — it is the most
   consequential fact about this team tonight. Do not bury it at the end.
 - Name the top 2-3 scorers with season PPG. The player with the highest season PPG in HOME TEAM STATS must be named — do not skip the leading scorer.
-- RECENT FORM: weave in 1-2 sentences from the ANALYSIS block in RECENT FORM for {home_full}.
-  - ATTRIBUTION RULE: before writing, identify the player named under "Offensive engine" or
-    "Go-to scorer" in the {home_full} RECENT FORM block. That is the player who produced those
-    scores. Use THAT name — even if a different player leads season PPG. If the form scorer and
-    the season star are different people, name them separately (form scorer for recent games,
-    season star for season average). Never transfer recent game scores to the season PPG leader.
+- RECENT FORM ATTRIBUTION (do this before writing a single word):
+  0. PRE-FLIGHT: Before writing paragraph 2, write down (mentally) the exact text of the
+     VERBATIM OPENING SENTENCE from the {home_full} RECENT FORM block. That sentence must
+     appear word-for-word as the first sentence of this paragraph. If it says "Player A scored
+     X against Y", your paragraph opens with "Player A scored X against Y." — even if another
+     player had stronger recent games by your own judgment.
+  1. Find the line starting with "Offensive engine:" or "Go-to scorer:" in the {home_full} RECENT FORM block.
+  2. Read the player name on that line. That is the ONLY player who may be credited with recent game scores.
+  3. Find the line starting with "VERBATIM OPENING SENTENCE" in that same block. Copy it exactly — do not change the player name, do not substitute any other name.
+  4. If the form scorer and the season star are different people, name them separately (form scorer for recent games, season star for season average).
+  Any player name substitution is a critical error that will be rejected.
   - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
     "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
     the engine, primary scorer, or driving force of recent scoring.
+  - DO NOT invent or add "averaging X PPG this season" for any player unless the RECENT FORM
+    bullet explicitly includes a PPG figure (e.g., "Offensive engine: OG Anunoby (26 PPG season)").
+    If no PPG appears in the bullet, do not add a season average for that player.
   - COLLAPSE/SURGE ARC: if present, incorporate it — use the quoted phrase or close paraphrase.
   - Open directly with "[Player] scored X against Y and Z against W." Never characterize first.
   - Never write "between X and Y points" — name each individual score.
@@ -540,26 +478,27 @@ PARAGRAPH 3 — {away_full}:
 - DAY-TO-DAY: {away_dtd if away_dtd else f"None — write nothing about injury status for {away_full}. Do NOT state that no players are injured or list any availability. Silence = healthy."}
   If a DAY-TO-DAY note exists, it must be the FIRST sentence of this paragraph.
 - Name the top 2-3 scorers with season PPG.
-- RECENT FORM: same attribution and formatting rules as paragraph 2. Before writing, identify
-  the player named under "Offensive engine" or "Go-to scorer" in the {away_full} RECENT FORM
-  block. Use THAT name for the scoring credit — not the season PPG leader.
+- RECENT FORM ATTRIBUTION (do this before writing a single word):
+  0. PRE-FLIGHT: Before writing paragraph 3, write down (mentally) the exact text of the
+     VERBATIM OPENING SENTENCE from the {away_full} RECENT FORM block. That sentence must
+     appear word-for-word as the first sentence of this paragraph. If it says "Player A scored
+     X against Y", your paragraph opens with "Player A scored X against Y." — even if another
+     player had stronger recent games by your own judgment.
+  1. Find the line starting with "Offensive engine:" or "Go-to scorer:" in the {away_full} RECENT FORM block.
+  2. Read the player name on that line. That is the ONLY player who may be credited with recent game scores.
+  3. Find the line starting with "VERBATIM OPENING SENTENCE" in that same block. Copy it exactly — do not change the player name, do not substitute any other name.
+  4. If you cannot find a VERBATIM OPENING SENTENCE, use the engine/scorer's name from step 2.
+  Any player name substitution (e.g., writing "Jrue Holiday" when the engine is "Deni Avdija") is a critical error that will be rejected.
   - SINGLE ENGINE RULE: there is exactly ONE offensive engine per team — the player named under
     "Offensive engine" or "Go-to scorer" in RECENT FORM. Do not describe any other player as
     the engine, primary scorer, or driving force of recent scoring.
+  - DO NOT invent or add "averaging X PPG this season" for any player unless the RECENT FORM
+    bullet explicitly includes a PPG figure (e.g., "Offensive engine: OG Anunoby (26 PPG season)").
+    If no PPG appears in the bullet, do not add a season average for that player.
 - CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
 - MILESTONE: if a MILESTONE signal for {away_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph with the specific detail verbatim or close paraphrase.
 - EMERGENCY ROSTER: {away_emergency}
 - Use ONLY players from {away_full}'s AUTHORIZED STATS ROSTER. Any player from {home_full} or any other team appearing in this paragraph is a critical error.
-
-PARAGRAPH 4 — MATCHUP ANGLE:
-- Use this pre-computed signal as your foundation — do not invent a different matchup:
-  {matchup_signal if matchup_signal else "No signal computed — identify the key tension from the stats tables yourself."}
-- Build 2-3 sentences around that specific tension using player names and numbers from the tables.
-- Do NOT reference the H2H result — it has its own dedicated section below the narrative.
-- May name players from both teams.
-- No generic language: no "key factor in determining the outcome", no abstract style descriptions.
-- NO REPETITION: each sentence must introduce a different statistic. Do not repeat any number or player name already used earlier in this paragraph.
-- CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
 
 ABSOLUTE RULES:
 1. ACTIVE ROSTER: Only name players listed in ACTIVE ROSTERS. Any player not listed has been traded or is unavailable.
@@ -573,7 +512,7 @@ ABSOLUTE RULES:
 9. PARAGRAPH OWNERSHIP: paragraph 2 = {home_full} only, paragraph 3 = {away_full} only. No cross-team player mentions in these paragraphs.
 10. BANNED PHRASES: reread your output before finalizing. Any sentence with a banned phrase must be rewritten.
 
-Write ONLY the 4 paragraphs."""
+Write ONLY the 3 paragraphs."""
 
     print(f"[NarrativeComposer] Generating narrative ...")
     response = _get_llm().invoke([HumanMessage(content=prompt)])

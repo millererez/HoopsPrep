@@ -24,10 +24,12 @@ def _get_llm():
 
 
 def reviewer_node(state: GraphState) -> dict:
-    narrative      = state.get("narrative_section", "")
-    stakes_context = state.get("stakes_context", "")
-    injury_summary = state.get("injury_summary", "")
-    recent_form    = state.get("recent_form", "")
+    narrative            = state.get("narrative_section", "")
+    stakes_context       = state.get("stakes_context", "")
+    injury_summary       = state.get("injury_summary", "")
+    recent_form          = state.get("recent_form", "")
+    player_team_map      = state.get("player_team_map", "")
+    out_players_summary  = state.get("out_players_summary", "")
 
     if not narrative.strip():
         return {"review_issues": ""}
@@ -62,6 +64,15 @@ Be specific — the writer needs enough information to fix it without seeing thi
 ─── RECENT FORM ───
 {recent_form or "Unavailable."}
 
+─── PLAYER-TEAM ROSTER ───
+{player_team_map or "Unavailable."}
+Paragraph 2 = home team. Paragraph 3 = away team.
+
+─── OUT PLAYERS (Python-verified — this is the only authoritative source) ───
+{out_players_summary or "Unavailable."}
+CRITICAL: only the players listed above as OUT are OUT. Any player NOT listed here is ACTIVE,
+regardless of what you know from training data or any other source.
+
 ═══════════ CHECKLIST ═══════════
 
 CHECK 1 — DTD NEGATIVE STATEMENT:
@@ -75,23 +86,42 @@ CHECK 1 — DTD NEGATIVE STATEMENT:
 CHECK 2 — POSITION LABELS:
   PASS if: play-in teams (#7–#10 in STAKES CONTEXT) are not described as having a "playoff spot"
   or "making the playoffs" (play-in ≠ direct playoff berth).
-  ISSUE if: a play-in team is described as securing or having a playoff spot. Quote the sentence
-  and state the correct label from STAKES CONTEXT.
+  ISSUE if: a play-in team is described as securing or having a playoff spot. Quote the wrong
+  sentence, then write a broadcast-ready replacement sentence using the exact play-in label from
+  STAKES CONTEXT (e.g., "The [Team] are the play-in #9 seed, 3 games behind the #7 seed.").
+  Format: ISSUE 2: "[wrong sentence]" → Replace with: "[your replacement sentence]"
+  The replacement must be pure broadcast prose — no meta-commentary, no "should not be described
+  as", no "should be referred to as". Write what the narrative should say, not what it shouldn't.
 
 CHECK 3 — STAKES NUMBERS:
   PASS if: paragraph 1 includes at least one specific games-back number for EACH team
   (e.g., "3.5 back of #4", "1.5 ahead of #9"). Both teams must have a number — not just one.
   ISSUE if: either team's playoff situation is described with no games-back number, even if the
-  other team has one. State which team is missing the number and what number STAKES CONTEXT provides.
+  other team has one.
+  Format: ISSUE 3: "[exact wrong sentence]" → Replace with: "[rewrite the sentence so it
+  includes the games-back number from STAKES CONTEXT, e.g., 'The Hawks are 4 games behind
+  the #4 seed, which would secure home court in the first round.']"
+  The replacement must be pure broadcast prose — no meta-commentary like "is missing a
+  games-back number". Write what the sentence should say, not what is wrong with it.
 
 CHECK 4 — ATTRIBUTION:
-  PASS if: the player credited with specific recent game scores in paragraphs 2–3 matches
-  the "Offensive engine" or "Go-to scorer" in the RECENT FORM block for that team.
+  Step 1: For each team, find the line starting with "Offensive engine:" or "Go-to scorer:"
+  in that team's RECENT FORM block. Read the player name on that line. That name is the
+  authoritative engine — do NOT substitute the season PPG leader, the season star, or any
+  other player for it. The RECENT FORM block already accounts for season star overrides.
+  Step 2: Verify the narrative credits that player with recent game scores.
+  Step 3: Verify no player from one team's roster appears in the other team's paragraph
+  (using PLAYER-TEAM ROSTER above).
   IMPORTANT: if the RECENT FORM block shows a player as engine AND that player is listed as
-  OUT in the INJURY REPORT, then the replacement scorer (the next player in RECENT FORM) is
+  OUT in the OUT PLAYERS list, then the replacement scorer (the next player in RECENT FORM) is
   the correct engine — do NOT flag the replacement as wrong.
-  ISSUE if: game scores are attributed to a player who is not the engine or go-to scorer
-  in RECENT FORM. Quote the sentence and state the correct player name from RECENT FORM.
+  ISSUE if: specific recent game scores (e.g., "scored 30 against the Clippers") are
+  attributed to a player who is not the engine or go-to scorer in RECENT FORM, OR a player
+  from one team appears in the other team's paragraph.
+  NOTE: mentioning a player's season PPG average is NOT an attribution error — only flag
+  sentences that credit specific recent game scores to the wrong player.
+  Quote the exact sentence, name the wrong player, name the correct player, and specify
+  which paragraph (e.g., "In the Portland Trail Blazers paragraph, ...").
 
 CHECK 5 — H2H IN NARRATIVE:
   PASS if: no paragraph references a prior meeting or previous game result between the teams.
@@ -103,8 +133,9 @@ CHECK 6 — BANNED PHRASES:
   ISSUE if: any appear. Quote the exact sentence containing the banned phrase.
 
 CHECK 8 — OUT PLAYER FRAMING:
-  From INJURY REPORT, read the exact names listed as OUT (not Day-To-Day). Only those exact
-  names are OUT players — do not infer or assume any other player is OUT.
+  Use ONLY the OUT PLAYERS list above — it is Python-verified and overrides everything else.
+  Do not use the INJURY REPORT prose, your training knowledge, or any other source to determine
+  who is OUT. If a player is not in the OUT PLAYERS list, they are ACTIVE — period.
   ALLOWED FRAMING: A sentence of the form "With [OUT player] sidelined, [active player] has
   taken over / stepped up / leads the offense" is PERMITTED — this is the correct absence
   framing. Do NOT flag it. The OUT player is not described as contributing tonight; the
@@ -134,6 +165,26 @@ No other text. No PASS lines. Only issues or APPROVED."""
     print("[Reviewer]  Running checklist ...")
     response = _get_llm().invoke([HumanMessage(content=prompt)])
     llm_output = response.content.strip()
+
+    # Python-guard: drop ISSUE 8 lines that name a player not in out_players_summary.
+    # The reviewer LLM sometimes hallucinates OUT status from training knowledge.
+    if llm_output != "APPROVED" and out_players_summary:
+        out_names_lower: set[str] = set()
+        for line in out_players_summary.splitlines():
+            if "OUT:" in line:
+                after = line.split("OUT:", 1)[1].strip()
+                if after.lower() != "none":
+                    for n in after.split(","):
+                        out_names_lower.add(n.strip().lower())
+        import re as _re2
+        filtered: list[str] = []
+        for line in llm_output.splitlines():
+            if _re2.match(r'\s*ISSUE\s+(CHECK\s+)?8\s*:', line, _re2.IGNORECASE):
+                if not any(name in line.lower() for name in out_names_lower):
+                    print(f"[Reviewer]  Dropping false CHECK 8 (player not in OUT list): {line.strip()}")
+                    continue
+            filtered.append(line)
+        llm_output = "\n".join(filtered).strip() or "APPROVED"
 
     if llm_output == "APPROVED" and not python_issues:
         print("[Reviewer]  APPROVED — no issues found")

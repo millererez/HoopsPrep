@@ -9,6 +9,7 @@ import re
 from collections import Counter
 
 from core.state import GraphState, ordinal, extract_teams, parse_home_away
+from nodes.utils import fmt_num
 from nodes.espn_client import (
     build_standings_lookup,
     build_player_lookup,
@@ -40,13 +41,16 @@ def _analyze_form(
     scorer_pts: dict[str, list[int]] = {}
     scorer_peak_opp: dict[str, str] = {}
     scorer_opps: dict[str, list[str]] = {}
+    scorer_dates: dict[str, list[str]] = {}
     recent_results = []
 
     for line in form_lines:
+        date_m   = re.search(r'^(\w+ \d+)\s+vs', line)
         opp_m    = re.search(r'vs ([A-Za-z ]+?) \(', line)
         result_m = re.search(r'\((W|L)\s+\d+-\d+\)', line)
         scorer_m = re.search(r':\s+(.+?)\s+(\d+)\s+pts', line)
-        opp = opp_m.group(1) if opp_m else ""
+        opp  = opp_m.group(1) if opp_m else ""
+        date = date_m.group(1) if date_m else ""
         if result_m:
             if result_m.group(1) == "W":
                 wins += 1
@@ -59,6 +63,7 @@ def _analyze_form(
             pts  = int(scorer_m.group(2))
             scorer_counts[name] += 1
             scorer_opps.setdefault(name, []).append(opp)
+            scorer_dates.setdefault(name, []).append(date)
             if pts > max(scorer_pts.get(name, [0])):
                 scorer_peak_opp[name] = opp
             scorer_pts.setdefault(name, []).append(pts)
@@ -87,17 +92,32 @@ def _analyze_form(
             )
 
     if scorer_counts:
-        top_name, top_count = scorer_counts.most_common(1)[0]
-        pts_list = scorer_pts[top_name]
+        # Tie-break: when two players share the top count, prefer the season star.
+        # Prevents insertion-order randomness from picking the wrong engine.
+        top_candidates = scorer_counts.most_common(2)
+        if (
+            len(top_candidates) >= 2
+            and top_candidates[0][1] == top_candidates[1][1]
+            and season_star
+            and season_star[0] in {n for n, _ in top_candidates}
+        ):
+            top_name  = season_star[0]
+            top_count = top_candidates[0][1]
+        else:
+            top_name, top_count = top_candidates[0]
+        pts_list  = scorer_pts[top_name]
         opps_list = scorer_opps.get(top_name, [])
+        dates_list = scorer_dates.get(top_name, [])
         # Pre-build the verbatim opening sentence — LLM must copy it exactly
-        top2 = sorted(zip(pts_list, opps_list), key=lambda x: -x[0])[:2]
-        top2 = [(pts, opp) for pts, opp in top2 if opp.strip()]  # skip empty opponent names
+        top2 = sorted(zip(pts_list, opps_list, dates_list), key=lambda x: -x[0])[:2]
+        top2 = [(pts, opp, date) for pts, opp, date in top2 if opp.strip()]
+        _use_dates = len({opp for _, opp, _ in top2}) < len(top2)  # True if duplicate opponent
         verbatim = f"{top_name} scored " + " and ".join(
-            f"{pts} against the {opp}" for pts, opp in top2
+            (f"{pts} on {date} against the {opp}" if _use_dates else f"{pts} against the {opp}")
+            for pts, opp, date in top2
         ) + "."
         per_game_str = " and ".join(
-            f"{pts} pts vs {opp}" for pts, opp in zip(pts_list, opps_list)
+            f"{pts} pts vs {opp} ({date})" for pts, opp, date in zip(pts_list, opps_list, dates_list)
         )
         if top_count >= round(total * 0.6):
             bullets.append(
@@ -144,16 +164,19 @@ def _analyze_form(
             if star_pts:
                 # Star appeared in recent games — override the form scorer
                 bullets = [b for b in bullets if "Offensive engine:" not in b and "Go-to scorer:" not in b and "Spread offense:" not in b]
-                star_opps = scorer_opps.get(star_name, [])
-                top2_star = sorted(zip(star_pts, star_opps), key=lambda x: -x[0])[:2]
+                star_opps  = scorer_opps.get(star_name, [])
+                star_dates = scorer_dates.get(star_name, [])
+                top2_star = sorted(zip(star_pts, star_opps, star_dates), key=lambda x: -x[0])[:2]
+                _use_dates_star = len({opp for _, opp, _ in top2_star}) < len(top2_star)
                 verbatim_star = f"{star_name} scored " + " and ".join(
-                    f"{pts} against the {opp}" for pts, opp in top2_star
+                    (f"{pts} on {date} against the {opp}" if _use_dates_star else f"{pts} against the {opp}")
+                    for pts, opp, date in top2_star
                 ) + "."
                 per_game_str = " and ".join(
-                    f"{pts} pts vs {opp}" for pts, opp in zip(star_pts, star_opps)
+                    f"{pts} pts vs {opp} ({date})" for pts, opp, date in zip(star_pts, star_opps, star_dates)
                 )
                 bullets.append(
-                    f"  • Offensive engine: {star_name} ({star_ppg:.1f} PPG season) — "
+                    f"  • Offensive engine: {star_name} ({fmt_num(star_ppg)} PPG season) — "
                     f"{per_game_str}. VERBATIM OPENING SENTENCE (copy exactly): '{verbatim_star}'"
                 )
                 if form_leader:
@@ -167,7 +190,7 @@ def _analyze_form(
                 # Keep the form scorer — they are the correct recent offensive driver.
                 # Add the star separately so the LLM knows their season role.
                 bullets.append(
-                    f"  • Season star (not in recent form window): {star_name} ({star_ppg:.1f} PPG season). "
+                    f"  • Season star (not in recent form window): {star_name} ({fmt_num(star_ppg)} PPG season). "
                     f"Mention season average only — do NOT attribute recent game scores to this player."
                 )
 
@@ -177,11 +200,30 @@ def _analyze_form(
         out_name, out_ppg = out_star
         form_scorer = scorer_counts.most_common(1)[0][0] if scorer_counts else "the team"
         bullets.append(
-            f"  • ABSENT STAR: {out_name} ({out_ppg:.1f} PPG season avg) is OUT tonight. "
+            f"  • ABSENT STAR: {out_name} ({fmt_num(out_ppg)} PPG season avg) is OUT tonight. "
             f"Open this paragraph with exactly one sentence acknowledging his absence, e.g.: "
             f"'With {out_name} sidelined, {form_scorer} has taken over as the primary scorer.' "
             f"Do NOT describe {out_name} as contributing, scoring, or influencing tonight's game."
         )
+
+    # Drop any "Notable performance" bullet for a player already named in a VERBATIM sentence.
+    # Prevents the composer from generating two separate sentences about the same player.
+    verbatim_players = set()
+    for b in bullets:
+        if "VERBATIM OPENING SENTENCE" in b or "INCLUDE THIS SENTENCE VERBATIM" in b:
+            # Extract player name — it's the first word(s) before " scored" or " operate"
+            import re as _re3
+            m = _re3.match(r"\s*•\s*(?:Offensive engine|Go-to scorer|ABSENT STAR|Season star)?[^:]*:\s*(\w[\w\s\-'\.]+?)\s+(?:scored|operate)", b)
+            if m:
+                verbatim_players.add(m.group(1).strip())
+    if verbatim_players:
+        bullets = [
+            b for b in bullets
+            if not (
+                b.strip().startswith("• Notable performance:")
+                and any(p in b for p in verbatim_players)
+            )
+        ]
 
     return "\n".join(bullets)
 
@@ -241,6 +283,7 @@ def _compute_stakes_context(
     # Meaningful boundary seeds and what crossing them means
     BOUNDARIES: dict[int, str] = {
         4:  "home court in first round",
+        5:  "losing home court (falls to direct playoff #5)",
         6:  "direct playoff berth",
         7:  "play-in double-chance (hosts 7/8, guaranteed two attempts)",
         8:  "play-in with second chance if first game lost",
@@ -258,9 +301,18 @@ def _compute_stakes_context(
         if gb is None:
             continue
         if 0 < gb <= games_remaining:
-            reachable.append(f"{gb:.1f} back of #{target_seed} — {BOUNDARIES[target_seed]}")
+            reachable.append(f"{fmt_num(gb)} back of #{target_seed} — {BOUNDARIES[target_seed]}")
         elif -games_remaining <= gb < 0:
-            at_risk.append(f"{abs(gb):.1f} ahead of #{target_seed} — {BOUNDARIES[target_seed]}")
+            # Skip same-tier boundaries — crossing them doesn't change the playoff outcome:
+            #   • #4 as risk for seeds 1-4: all have home court, falling within that range changes
+            #     seeding but not home-court status. Meaningful risk is #5 (losing home court).
+            #   • #6 as risk for seeds 1-6: both #5 and #6 are direct playoff (no home court).
+            #     Meaningful risk is #7 (play-in).
+            if target_seed == 4 and seed <= 4:
+                continue
+            if target_seed == 6 and seed <= 6:
+                continue
+            at_risk.append(f"{fmt_num(abs(gb))} ahead of #{target_seed} — {BOUNDARIES[target_seed]}")
 
     result = f"{full_name}: {pos_label} | {games_remaining} games remaining"
     if reachable:
@@ -342,6 +394,14 @@ def data_specialist_node(state: GraphState) -> dict:
 
     injury_summary = "\n\n".join(injury_parts)
 
+    # ── Python-verified OUT players summary (passed to reviewer/rewriter) ───
+    out_summary_lines = []
+    for full_name, _, espn_id in teams:
+        out_names = out_names_by_team.get(espn_id, set())
+        names_str = ", ".join(sorted(out_names)) if out_names else "none"
+        out_summary_lines.append(f"{full_name} OUT: {names_str}")
+    out_players_summary = "\n".join(out_summary_lines)
+
     # ── Build per-team stats sections (OUT players excluded) ───────────────
     sections = []
     for full_name, nickname, espn_id in teams:
@@ -357,8 +417,8 @@ def data_specialist_node(state: GraphState) -> dict:
         ppg_r   = info.get("ppg_rank", "?")
         def_r   = info.get("def_rank", "?")
 
-        ppg_str  = f"{ppg:.1f} PPG ({ordinal(ppg_r)} in NBA)" if ppg else "PPG N/A"
-        def_str  = f"{opp_ppg:.1f} Opp PPG ({ordinal(def_r)} in NBA)" if opp_ppg else "Def N/A"
+        ppg_str  = f"{fmt_num(ppg)} PPG ({ordinal(ppg_r)} in NBA)" if ppg else "PPG N/A"
+        def_str  = f"{fmt_num(opp_ppg)} Opp PPG ({ordinal(def_r)} in NBA)" if opp_ppg else "Def N/A"
         seed_str = f"#{seed} {conf.replace(' Conference','')}" if seed != "?" else "N/A"
 
         out_names = out_names_by_team.get(espn_id, set())
@@ -383,9 +443,9 @@ def data_specialist_node(state: GraphState) -> dict:
         if roster:
             for p in roster:
                 rows.append(
-                    f"| {p['name']} | {p['mins']} | {p['ppg']} | {p['fga']} | {p['fg_pct']} "
-                    f"| {p['tpa']} | {p['tpp']} | {p['fta']} | {p['ft_pct']} "
-                    f"| {p['rpg']} | {p['apg']} | {p['stl']} | {p['blk']} | {p['tov']} |"
+                    f"| {p['name']} | {fmt_num(p['mins'])} | {fmt_num(p['ppg'])} | {fmt_num(p['fga'])} | {p['fg_pct']} "
+                    f"| {fmt_num(p['tpa'])} | {p['tpp']} | {fmt_num(p['fta'])} | {p['ft_pct']} "
+                    f"| {fmt_num(p['rpg'])} | {fmt_num(p['apg'])} | {fmt_num(p['stl'])} | {fmt_num(p['blk'])} | {fmt_num(p['tov'])} |"
                 )
         else:
             rows.append("| Stats unavailable | — | — | — | — | — |")
@@ -496,10 +556,22 @@ def data_specialist_node(state: GraphState) -> dict:
         ))
     stakes_context = "\n".join(stakes_parts)
 
+    # ── Build player-team map (top 5 PPG per team, active only) ────────────────
+    map_lines = []
+    role = ["HOME TEAM", "AWAY TEAM"]
+    for i, (full_name, _, espn_id) in enumerate(teams):
+        ppg_lookup = season_ppg_by_team.get(espn_id, {})
+        top5 = sorted(ppg_lookup.items(), key=lambda x: -x[1])[:5]
+        names = ", ".join(n for n, _ in top5) if top5 else "No data"
+        map_lines.append(f"{role[i] if i < 2 else 'TEAM'} ({full_name}): {names}")
+    player_team_map = "\n".join(map_lines)
+
     return {
-        "player_stats_table": "\n\n".join(sections),
-        "h2h_summary":        h2h_text,
-        "injury_summary":     injury_summary,
-        "recent_form":        recent_form,
-        "stakes_context":     stakes_context,
+        "player_stats_table":  "\n\n".join(sections),
+        "h2h_summary":         h2h_text,
+        "injury_summary":      injury_summary,
+        "recent_form":         recent_form,
+        "stakes_context":      stakes_context,
+        "player_team_map":     player_team_map,
+        "out_players_summary": out_players_summary,
     }

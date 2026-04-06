@@ -28,6 +28,8 @@ class GraphState(TypedDict):
     recent_form: str             # ESPN API: top scorer from each of last 3 games per team
     team_narrative_bullets: str  # Tavily ingestion status (logging only)
     stakes_context: str          # computed: seed consequences + games back/ahead for both teams
+    player_team_map: str         # top-5 PPG players per team — guards against cross-team name contamination
+    out_players_summary: str     # Python-verified OUT players per team (not LLM-parsed)
     narrative_section: str       # LLM — 4-paragraph unified narrative
     review_issues: str           # reviewer checklist output — empty = approved
     final_report: str

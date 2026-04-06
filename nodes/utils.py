@@ -68,6 +68,15 @@ BANNED_PATTERNS = [
 ]
 
 
+def fmt_num(v) -> str:
+    """Format a number stripping trailing .0 from whole numbers. Accepts str or float."""
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else f"{f:.1f}"
+    except (ValueError, TypeError):
+        return str(v)
+
+
 def find_violations(text: str) -> list[str]:
     found = []
     lower = text.lower()

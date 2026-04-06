@@ -50,10 +50,20 @@ def build_standings_lookup() -> dict[str, dict]:
                 "ppg":       float(stats.get("avgPointsFor", 0) or 0),
                 "opp_ppg":   float(stats.get("avgPointsAgainst", 0) or 0),
                 "conf":      conf_name,
-                "conf_seed": int(float(stats.get("playoffSeed", 0) or 0)),
+                "conf_seed": 0,   # assigned below after sorting
                 "streak":    stats.get("streak", "—"),
                 "l10":       stats.get("Last Ten Games", "—"),
             })
+
+    # Assign conference seed by sorting each conference by record (wins desc, losses asc)
+    from collections import defaultdict
+    conf_groups: dict = defaultdict(list)
+    for row in rows:
+        conf_groups[row["conf"]].append(row)
+    for group in conf_groups.values():
+        group.sort(key=lambda r: (-r["wins"], r["losses"]))
+        for rank, r in enumerate(group, start=1):
+            r["conf_seed"] = rank
 
     ppg_sorted = sorted(rows, key=lambda r: r["ppg"], reverse=True)
     ppg_rank   = {r["id"]: i + 1 for i, r in enumerate(ppg_sorted)}
@@ -243,7 +253,7 @@ def fetch_recent_form(
         comp    = event["competitions"][0]
         game_id = comp["id"]
         utc_dt  = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
-        date_str = utc_dt.astimezone(EST).strftime("%b %d")
+        date_str = utc_dt.astimezone(EST).strftime("%B %d")
 
         team_score = opp_score = opp_name = ""
         result = ""
