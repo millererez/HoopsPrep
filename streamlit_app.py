@@ -6,7 +6,7 @@ import streamlit as st
 load_dotenv()
 
 API_KEY  = os.environ.get("HOOPSPREP_API_KEY", "")
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get("API_URL", "http://localhost:8000")
 HEADERS  = {"X-API-Key": API_KEY}
 
 
