@@ -95,7 +95,10 @@ CHECK 2 — POSITION LABELS:
 
 CHECK 3 — STAKES NUMBERS:
   PASS if: paragraph 1 includes at least one specific games-back number for EACH team
-  (e.g., "3.5 back of #4", "1.5 ahead of #9"). Both teams must have a number — not just one.
+  (e.g., "3.5 back of #4", "1.5 ahead of #9", "1 game back of #8"). Both teams must have a number — not just one.                                     
+  NOTE: a sentence like "The Trail Blazers are the play-in #9 seed, 1 game back of the #8 seed"                                                       
+  DOES contain a games-back number ("1 game back") — do NOT flag it.                                                                                  
+  If ISSUE 2 already fires for a team's sentence, do NOT also fire ISSUE 3 for the same sentence.  
   ISSUE if: either team's playoff situation is described with no games-back number, even if the
   other team has one.
   Format: ISSUE 3: "[exact wrong sentence]" → Replace with: "[rewrite the sentence so it

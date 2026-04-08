@@ -41,6 +41,9 @@ def rewrite_node(state: GraphState) -> dict:
 
 RULE: Fix ONLY the sentences listed in ISSUES. Every other sentence must be copied
 character-for-character. Do not rephrase, improve, or restructure anything else.
+RULE: When fixing an ISSUE, you MUST remove the original quoted sentence and put your
+corrected sentence in its exact place. Do NOT keep the original — replace it in-place.
+Do NOT add a new sentence alongside the original. The total sentence count must not increase.
 RULE: In each ISSUE, the text after "→" is your instruction — never copy any word or
 phrase from it into the narrative. Write original broadcast prose instead.
 
