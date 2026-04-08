@@ -76,6 +76,21 @@ def build_standings_lookup() -> dict[str, dict]:
     }
 
 
+def _label_stat(cat: dict, label: str) -> str:
+    """
+    Look up a stat value by its label name within a category dict.
+    Falls back to "—" if the label is absent or the index is out of range.
+    ESPN categories carry a 'labels' list whose indices correspond to 'totals'.
+    """
+    labels = cat.get("labels", [])
+    totals = cat.get("totals", [])
+    try:
+        idx = labels.index(label)
+        return totals[idx]
+    except (ValueError, IndexError):
+        return "—"
+
+
 def build_player_lookup() -> list[dict]:
     """
     Fetch league-wide per-game stats (sorted by PPG descending).
@@ -85,6 +100,9 @@ def build_player_lookup() -> list[dict]:
                                   totals[6]  = 3P%,  totals[7]  = APG,
                                   totals[9]  = FT%,  totals[11] = TOV
       categories[2] = defensive → totals[0]  = STL,  totals[1]  = BLK
+
+    New fields use label-based lookup (_label_stat) so index drift doesn't
+    corrupt existing values.
     """
     data = espn_fetch(_ESPN_STATS_URL)
     players = []
@@ -96,6 +114,7 @@ def build_player_lookup() -> list[dict]:
         try:
             gp     = int(float(cats[0]["totals"][0]))
             mins   = cats[0]["totals"][1]
+            pf     = cats[0]["totals"][2]   # confirmed: general[2] = PF/game
             rpg    = cats[0]["totals"][11]
             ppg    = cats[1]["totals"][0]
             fga    = cats[1]["totals"][2]
@@ -116,15 +135,20 @@ def build_player_lookup() -> list[dict]:
             fta = "—"
         if gp < _MIN_GAMES:
             continue
+
         players.append({
             "name":    athlete.get("displayName", "Unknown"),
             "team_id": athlete.get("teamId", ""),
+            "jersey":  athlete.get("jersey", "—"),
+            "pos":     (athlete.get("position") or {}).get("abbreviation", "—"),
+            "age":     athlete.get("age", "—"),
+            "gp": gp,
             "mins": mins, "ppg": ppg,
             "fga": fga, "fg_pct": fg_pct,
             "tpa": tpa, "tpp": tpp,
             "fta": fta, "ft_pct": ft_pct,
             "rpg": rpg, "apg": apg,
-            "stl": stl, "blk": blk, "tov": tov,
+            "stl": stl, "blk": blk, "tov": tov, "pf": pf,
         })
     return players
 
@@ -212,6 +236,20 @@ def fetch_injuries(team_id: str, team_name: str) -> list[str]:
         if status:
             results.append(f"{athlete['displayName']} \u2014 {status}")
     return results
+
+
+def build_jersey_lookup(team_id: str) -> dict[str, str]:
+    """
+    Fetch jersey numbers for all players on a team from the roster endpoint.
+    Returns {displayName: jersey_number_str}.
+    """
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
+    data = espn_fetch(url)
+    return {
+        a.get("displayName", ""): a.get("jersey", "—")
+        for a in data.get("athletes", [])
+        if a.get("displayName")
+    }
 
 
 def fetch_full_active_roster(team_id: str, injured_names: set[str]) -> list[str]:

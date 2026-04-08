@@ -13,6 +13,7 @@ from nodes.utils import fmt_num
 from nodes.espn_client import (
     build_standings_lookup,
     build_player_lookup,
+    build_jersey_lookup,
     fetch_h2h_games,
     fetch_injuries,
     fetch_full_active_roster,
@@ -398,6 +399,17 @@ def data_specialist_node(state: GraphState) -> dict:
         print(f"[DataSpecialist]    Player stats failed: {exc}")
         all_players = []
 
+    # ── Build jersey lookup from roster endpoints (stats endpoint lacks jersey) ─
+    jersey_lookup: dict[str, str] = {}
+    for _, _, espn_id in teams:
+        try:
+            jersey_lookup.update(build_jersey_lookup(espn_id))
+        except Exception:
+            pass
+    for p in all_players:
+        if p.get("jersey") in ("—", "", None) and p["name"] in jersey_lookup:
+            p["jersey"] = jersey_lookup[p["name"]]
+
     # ── Fetch injuries first (needed to filter OUT players from roster) ───────
     injuries_by_team: dict[str, list[str]] = {}
     out_names_by_team: dict[str, set[str]] = {}
@@ -462,29 +474,27 @@ def data_specialist_node(state: GraphState) -> dict:
             if p["team_id"] == espn_id and p["name"] not in out_names
         ]
 
-        out_count    = len(out_names)
         active_count = len(roster)
-        availability = (
-            f" | Active roster: {active_count} players ({out_count} OUT)"
-            if active_count <= 8 else ""
-        )
         rows = [
             f"### {full_name}",
             f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}{availability}",
             f"",
             f"Team Stats: {ppg_str} | {def_str}",
-            "| Player | MIN | PPG | FGA | FG% | 3PA | 3P% | FTA | FT% | RPG | APG | STL | BLK | TOV |",
-            "|--------|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
+            "| # | Name | POS | Age | GP | MIN | PPG | FGA | FG% | 3PA | 3P% | FTA | FT% | REB | APG | STL | BLK | TOV | PF |",
+            "|---|--------|-----|-----|----|----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|",
         ]
         if roster:
             for p in roster:
                 rows.append(
-                    f"| {p['name']} | {fmt_num(p['mins'])} | {fmt_num(p['ppg'])} | {fmt_num(p['fga'])} | {p['fg_pct']} "
+                    f"| {p.get('jersey', '—')} | {p['name']} | {p.get('pos', '—')} | {p.get('age', '—')} "
+                    f"| {p.get('gp', '—')} | {fmt_num(p['mins'])} "
+                    f"| {fmt_num(p['ppg'])} | {fmt_num(p['fga'])} | {p['fg_pct']} "
                     f"| {fmt_num(p['tpa'])} | {p['tpp']} | {fmt_num(p['fta'])} | {p['ft_pct']} "
-                    f"| {fmt_num(p['rpg'])} | {fmt_num(p['apg'])} | {fmt_num(p['stl'])} | {fmt_num(p['blk'])} | {fmt_num(p['tov'])} |"
+                    f"| {fmt_num(p['rpg'])} | {fmt_num(p['apg'])} | {fmt_num(p['stl'])} | {fmt_num(p['blk'])} "
+                    f"| {fmt_num(p['tov'])} | {p.get('pf', '—')} |"
                 )
         else:
-            rows.append("| Stats unavailable | — | — | — | — | — |")
+            rows.append("| — | Stats unavailable | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |")
 
         if active_count <= 6:
             try:

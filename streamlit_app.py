@@ -325,12 +325,49 @@ if "report_data" in st.session_state:
 </div>
 <hr style="border-color: #10B981; border-width: 1px; margin: 0 0 0.8rem 0;">
 """, unsafe_allow_html=True)
-        st.markdown(stats_block)
 
-    # Footer
-    st.markdown("""
-<div style="text-align: center; padding: 2.5rem 0 1rem 0; color: #2d3f55;
-            font-size: 0.72rem; letter-spacing: 0.06em;">
-  Powered by ESPN API · HoopsPrep
-</div>
-""", unsafe_allow_html=True)
+        # 1. Split the block by team (using the markdown header "### ")
+        team_sections = stats_block.split("### ")
+        
+        for section in team_sections:
+            if not section.strip():
+                continue
+                
+            # Re-attach the header we split by
+            full_section = "### " + section
+            lines = full_section.split('\n')
+            
+            clean_lines = []
+            emergency_alerts = []
+            
+            # 2. Extract alerts for THIS specific team
+            for line in lines:
+                lower_line = line.lower()
+                if ("emergency roster" in lower_line or "g league" in lower_line or "10-day" in lower_line) and "|" not in line:
+                    clean_text = line.replace("🚨", "").replace("**", "").strip()
+                    if clean_text:
+                        emergency_alerts.append(clean_text)
+                else:
+                    clean_lines.append(line)
+            
+            # 3. Find exactly where the table starts so we can inject the warning right before it
+            table_start_idx = 0
+            for i, line in enumerate(clean_lines):
+                if line.startswith("|"):
+                    table_start_idx = i
+                    break
+            
+            # 4. Render the team section
+            if emergency_alerts:
+                # Print team info (Record, Team Stats)
+                st.markdown("\n".join(clean_lines[:table_start_idx]))
+                
+                # Print the warning
+                for alert in emergency_alerts:
+                    st.warning(alert, icon="🚨")
+                    
+                # Print the table
+                st.markdown("\n".join(clean_lines[table_start_idx:]))
+            else:
+                # No emergency for this team, just print normally
+                st.markdown("\n".join(clean_lines))
