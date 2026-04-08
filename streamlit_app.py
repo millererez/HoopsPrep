@@ -292,22 +292,6 @@ if "report_data" in st.session_state:
     # Narrative card
     section_card("Narrative", narrative, accent="#F5821E", icon="📋")
 
-    # Copy button (copies raw report text via pyperclip if available, else shows code block)
-    full_report = data["report"]
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("📋  Copy report to clipboard", key="copy_btn",
-                     type="secondary", use_container_width=True):
-            try:
-                import pyperclip
-                pyperclip.copy(full_report)
-                st.toast("Copied to clipboard!", icon="✅")
-            except Exception:
-                st.session_state["show_copy_box"] = True
-
-    if st.session_state.get("show_copy_box"):
-        st.code(full_report, language=None)
-
     # Injury card
     if injury_block:
         section_card("Injury Report", injury_block, accent="#F59E0B", icon="🩹")

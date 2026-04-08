@@ -477,7 +477,7 @@ def data_specialist_node(state: GraphState) -> dict:
         active_count = len(roster)
         rows = [
             f"### {full_name}",
-            f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}{availability}",
+            f"Record: W {wins} / L {losses} | Seed: {seed_str} | Streak: {streak} | Last 10: {l10}",
             f"",
             f"Team Stats: {ppg_str} | {def_str}",
             "| # | Name | POS | Age | GP | MIN | PPG | FGA | FG% | 3PA | 3P% | FTA | FT% | REB | APG | STL | BLK | TOV | PF |",
