@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: hoopsprep
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    envVars:
+      - key: API_URL
+        value: http://localhost:8000
+      - key: HOOPSPREP_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: CACHE_DB_PATH
+        value: /data/cache.db
+    disk:
+      name: hoopsprep-data
+      mountPath: /data
+      sizeGB: 1

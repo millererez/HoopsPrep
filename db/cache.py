@@ -10,7 +10,10 @@ import os
 import sqlite3
 from datetime import date
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "cache.db")
+_DB_PATH = os.environ.get(
+    "CACHE_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "cache.db"),
+)
 
 
 def _conn() -> sqlite3.Connection:

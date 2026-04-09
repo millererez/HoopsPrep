@@ -15,7 +15,8 @@ Security:
 import os
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 from datetime import datetime, timezone, timedelta
 
@@ -144,6 +145,11 @@ graph = build_graph()
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/health", include_in_schema=False)
+def health():
+    return {"status": "ok"}
+
 
 @app.get(
     "/games/tonight",

@@ -1,5 +1,13 @@
+# Secrets
 .env
-.venv/
-__pycache__/
-chroma_db/
+
+# Cache / databases
 cache.db
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
