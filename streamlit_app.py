@@ -26,6 +26,8 @@ def fetch_briefing(game_id: str) -> dict:
         json={"game_id": game_id},
         timeout=120,
     )
+    if resp.status_code == 429:
+        raise ValueError("Too many requests! Please wait a minute before checking another game. 🏀")
     if resp.status_code == 401:
         raise ValueError("Invalid API key — check your .env file")
     if resp.status_code == 404:

@@ -179,7 +179,7 @@ def get_games_tonight(
     response_model=BriefingResponse,
     summary="Generate a pre-game briefing",
 )
-@limiter.limit("3/minute")
+@limiter.limit("100/minute")
 def post_briefing(
     request: Request,
     body: BriefingRequest,
