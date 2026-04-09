@@ -1,12 +1,21 @@
 # HoopsPrep: Agentic AI System for NBA Pre-Game Briefings
 
 ## About The Project
-**HoopsPrep** is an AI system that generates structured, broadcast-style NBA pre-game briefings in seconds. 
+**HoopsPrep** is an end-to-end AI system that generates structured, broadcast-style NBA pre-game briefings in seconds. 
 
 This project automates the manual research process for sports analysts, fantasy basketball players and fans.  
 By quickly synthesizing raw ESPN statistics and dynamic web narratives into an easily digestible format, it functions similar to tools used by sports analysts and broadcasters to prepare for game night.
 
 Rather than acting as a simple API wrapper, HoopsPrep leverages an **Agentic AI Architecture** to autonomously fetch real-time data, perform dynamic Retrieval-Augmented Generation (RAG), and evaluate its own output before presenting it to the user.
+
+## Try it Live: [hoopsprep.onrender.com](https://hoopsprep.onrender.com/)
+
+## Demo
+
+
+https://github.com/user-attachments/assets/3c0f6d70-6867-4c20-ae5b-749230ccc731
+
+
 
 ## Key Technical Highlights
 * **Agentic Workflow & Reflection (LangGraph):** Implements a multi-agent Directed Acyclic Graph (DAG) featuring parallel data fetching and a single-pass review-and-refine loop powered by OpenAI models, improving output consistency and factual grounding.
@@ -53,9 +62,9 @@ START
 
 * **External APIs:** ESPN, Tavily
 
-* **DevOps:** Docker, Docker Compose
+* **DevOps:** Docker, Docker Compose, Render(Cloud Deployment)
 
-## Getting Started
+## Running Locally (For Developers)
 ### Prerequisites
 
 - Docker  
@@ -83,9 +92,12 @@ docker-compose up -d --build
 ```
 ### Access the Application
 Frontend UI: http://localhost:8501  
-Backend API(Swagger docs):: http://localhost:8000/docs
+Backend API(Swagger docs): http://localhost:8000/docs
 
 To stop the application, run:
 ```
 docker-compose down
 ```
+
+### Background
+This project was inspired by my experience at the "Kol HaSport" sports communications course, where I learned the meticulous process of preparing broadcast briefings. This is my attempt to solve that real-world problem through modern Software Engineering.
