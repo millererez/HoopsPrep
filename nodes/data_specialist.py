@@ -613,7 +613,7 @@ def data_specialist_node(state: GraphState) -> dict:
     player_team_map = "\n".join(map_lines)
 
     return {
-        "player_stats_table":  "**Season Averages — 2025-26**\n\n" + "\n\n".join(sections),
+        "player_stats_table":  "\n\n".join(sections),
         "h2h_summary":         h2h_text,
         "injury_summary":      injury_summary,
         "recent_form":         recent_form,

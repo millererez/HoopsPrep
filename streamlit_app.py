@@ -304,8 +304,11 @@ if "report_data" in st.session_state:
     if stats_block:
         st.markdown("""
 <div style="font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
-            text-transform: uppercase; color: #10B981; margin: 1.4rem 0 0.4rem 0;">
+            text-transform: uppercase; color: #10B981; margin: 1.4rem 0 0.2rem 0;">
   📈&nbsp; Player Stats
+</div>
+<div style="font-size: 0.95rem; color: #94a3b8; font-weight: 500; margin-bottom: 0.8rem;">
+  Season Averages — 2025-26
 </div>
 <hr style="border-color: #10B981; border-width: 1px; margin: 0 0 0.8rem 0;">
 """, unsafe_allow_html=True)
@@ -358,8 +361,8 @@ if "report_data" in st.session_state:
     
     st.markdown("""
     <div style="text-align: center; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px dashed #2d3f55;">
-      <span style="font-size: 1.15rem; font-weight: 700; color: #F5821E; letter-spacing: 0.05em; text-transform: uppercase;">
-        Enjoy the game! 🏀
+      <span style="font-size: 1.15rem; font-weight: 700; color: #F5821E; letter-spacing: 0.05em;">
+        Enjoy the game 🏀
       </span>
     </div>
     """, unsafe_allow_html=True)
