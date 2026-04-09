@@ -3,7 +3,7 @@
 ## About The Project
 **HoopsPrep** is an end-to-end AI system that generates structured, broadcast-style NBA pre-game briefings in seconds. 
 
-This project automates the manual research process for sports analysts, fantasy basketball players and fans.  
+This project automates the manual research process for sports analysts, fans and fantasy basketball players.  
 By quickly synthesizing raw ESPN statistics and dynamic web narratives into an easily digestible format, it functions similar to tools used by sports analysts and broadcasters to prepare for game night.
 
 Rather than acting as a simple API wrapper, HoopsPrep leverages an **Agentic AI Architecture** to autonomously fetch real-time data, perform dynamic Retrieval-Augmented Generation (RAG), and evaluate its own output before presenting it to the user.
