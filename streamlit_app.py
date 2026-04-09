@@ -355,3 +355,11 @@ if "report_data" in st.session_state:
             else:
                 # No emergency for this team, just print normally
                 st.markdown("\n".join(clean_lines))
+    
+    st.markdown("""
+    <div style="text-align: center; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px dashed #2d3f55;">
+      <span style="font-size: 1.15rem; font-weight: 700; color: #F5821E; letter-spacing: 0.05em; text-transform: uppercase;">
+        Enjoy the game! 🏀
+      </span>
+    </div>
+    """, unsafe_allow_html=True)
