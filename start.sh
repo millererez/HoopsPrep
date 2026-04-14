@@ -31,7 +31,7 @@ fi
 uvicorn api:app --host 0.0.0.0 --port 8000 &
 
 echo "Waiting for FastAPI to start..."
-timeout=15
+timeout=60
 while ! curl -s http://localhost:8000/health > /dev/null; do
   sleep 1
   ((timeout--))
