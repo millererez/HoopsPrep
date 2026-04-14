@@ -465,7 +465,7 @@ def narrative_composer_node(state: GraphState) -> dict:
     # ── Paragraph 1 instructions — branch by season phase ────────────────────
     if season_phase == "playin":
         if "TYPE 1" in stakes_context:
-            s2_opener = "Tonight's game is not an elimination contest —"
+            s2_opener = "There are no elimination stakes on the line tonight —"
         elif "TYPE 2" in stakes_context:
             s2_opener = "It's a WIN-OR-GO-HOME game for both teams —"
         elif "TYPE 3" in stakes_context:

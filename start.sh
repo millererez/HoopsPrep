@@ -12,15 +12,17 @@ if [ -f "$VERSION_FILE" ] && [ "$(cat "$VERSION_FILE")" = "$CURRENT_COMMIT" ]; t
 else
     echo "New deployment detected ($CURRENT_COMMIT) — clearing today's cache entries"
     python3 - <<'EOF'
-import sqlite3, datetime, os
+import sqlite3, os
 db = os.environ.get("CACHE_DB_PATH", "/data/cache.db")
 if os.path.exists(db):
-    today = datetime.date.today().isoformat()
-    conn = sqlite3.connect(db)
-    deleted = conn.execute("DELETE FROM report_cache WHERE date = ?", (today,)).rowcount
-    conn.commit()
-    conn.close()
-    print(f"  Removed {deleted} cached report(s) for {today}")
+    try:
+        conn = sqlite3.connect(db)
+        deleted = conn.execute("DELETE FROM report_cache").rowcount
+        conn.commit()
+        conn.close()
+        print(f"  Cleared {deleted} cached report(s) completely due to new deployment")
+    except sqlite3.Error as e:
+        print(f"  Database error: {e}")
 else:
     print("  No cache file yet — nothing to clear")
 EOF
