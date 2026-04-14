@@ -70,6 +70,11 @@ def _momentum_summary(table: str, team_name: str) -> str:
     direction = "winning" if streak.startswith("W") else "losing"
     n = streak[1:]
     games_remaining = 82 - int(wins) - int(losses)
+    if games_remaining == 0:
+        # Post-season: strip record and seed so the LLM cannot compute positional gaps.
+        # The record is already in the opener sentence; streak is all we need here.
+        return f"{team_name}: {direction} streak of {n}, {last10} last 10"
+
     seed_num_m = _re.match(r'#(\d+)', seed)
     seed_num = int(seed_num_m.group(1)) if seed_num_m else None
     if seed_num and 7 <= seed_num <= 10:
@@ -84,18 +89,19 @@ def _momentum_summary(table: str, team_name: str) -> str:
     )
 
 
-def _streak_text(section: str) -> str:
+def _streak_text(section: str, team_name: str = "") -> str:
     m = _re.search(r"Streak: (W|L)(\d+).*Last 10: ([\d-]+)", section)
     if not m:
         return ""
     direction, n, last10 = m.group(1), int(m.group(2)), m.group(3)
     word = "winning" if direction == "W" else "losing"
     n_word = _NUM_WORDS.get(n, str(n))
+    subj = team_name if team_name else "They"
     if n == 1:
-        return f"State only: 'They have a record of {last10} in their last ten contests.' Do NOT mention the {word} streak."
+        return f"State only: '{subj} have a record of {last10} in their last ten contests.' Do NOT mention the {word} streak."
     if direction == "W" and n >= 10:
-        return f"State: 'They are on a {n_word}-game winning streak.' Do NOT include the last-10 record."
-    return f"State: 'They are on a {n_word}-game {word} streak and have a record of {last10} in their last ten contests.'"
+        return f"State: '{subj} are on a {n_word}-game winning streak.' Do NOT include the last-10 record."
+    return f"State: '{subj} are on a {n_word}-game {word} streak and have a record of {last10} in their last ten contests.'"
 
 
 def _active_roster(table: str, team_name: str) -> list[str]:
@@ -329,6 +335,49 @@ def _extract_verbatim_sentence(team_name: str, recent_form: str) -> str:
     return ""
 
 
+def _build_playin_para1_sentences(
+    home_full: str, home_record_seed: str,
+    away_full: str, away_record_seed: str,
+    stakes_context: str,
+) -> tuple[str, str]:
+    """
+    Build the first two sentences of play-in paragraph 1 entirely in Python.
+    No LLM involvement — no arithmetic on seed numbers is possible.
+    Returns (sentence1, sentence2).
+    """
+    s1 = f"The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
+
+    winner_m = _re.search(r"Outcome — winner: (.+)", stakes_context)
+    loser_m  = _re.search(r"Outcome — loser: (.+)",  stakes_context)
+    winner_out = winner_m.group(1).rstrip(".") if winner_m else "advances"
+    loser_out  = loser_m.group(1).rstrip(".")  if loser_m  else "is eliminated"
+
+    if "TYPE 1" in stakes_context:
+        s2 = (
+            f"The winner {winner_out}, while the loser {loser_out} "
+            f"— this is not an elimination game for either side."
+        )
+    elif "TYPE 2" in stakes_context:
+        s2 = (
+            f"With both teams one loss from elimination, the winner {winner_out}, "
+            f"while the loser is immediately eliminated."
+        )
+    elif "TYPE 3" in stakes_context:
+        home_ctx_m = _re.search(rf"{_re.escape(home_full)}: (.+?)\.", stakes_context)
+        away_ctx_m = _re.search(rf"{_re.escape(away_full)}: (.+?)\.", stakes_context)
+        home_ctx = home_ctx_m.group(1) if home_ctx_m else "in the play-in"
+        away_ctx = away_ctx_m.group(1) if away_ctx_m else "in the play-in"
+        s2 = (
+            f"In a win-or-go-home game, {home_full} ({home_ctx}) hosts "
+            f"{away_full} ({away_ctx}) — the winner {winner_out}, "
+            f"and the loser is immediately eliminated."
+        )
+    else:
+        s2 = "Both teams meet in a play-in game with their seasons on the line."
+
+    return s1, s2
+
+
 def _retrieve(team_name: str, today: str) -> str:
     try:
         results = get_collection().query(
@@ -362,6 +411,7 @@ def narrative_composer_node(state: GraphState) -> dict:
     injury_summary = state.get("injury_summary", "")
     recent_form    = state.get("recent_form", "")
     stakes_context = state.get("stakes_context", "")
+    season_phase   = state.get("season_phase", "regular")
 
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
@@ -380,8 +430,8 @@ def narrative_composer_node(state: GraphState) -> dict:
     signals          = _game_signals(home_full, away_full, table, h2h_summary, injury_summary)
     home_roster      = _active_roster(table, home_full)
     away_roster      = _active_roster(table, away_full)
-    home_streak      = _streak_text(home_stats)
-    away_streak      = _streak_text(away_stats)
+    home_streak      = _streak_text(home_stats, home_full)
+    away_streak      = _streak_text(away_stats, away_full)
     home_record_seed = _record_seed_str(table, home_full) or home_full
     away_record_seed = _record_seed_str(table, away_full) or away_full
     home_short       = home_full.split()[-1]
@@ -410,6 +460,83 @@ def narrative_composer_node(state: GraphState) -> dict:
     print(f"[NarrativeComposer] Away milestone: {away_milestone or 'none'}")
     print(f"[NarrativeComposer] Home verbatim: {home_verbatim or 'none'}")
     print(f"[NarrativeComposer] Away verbatim: {away_verbatim or 'none'}")
+    print(f"[NarrativeComposer] Season phase: {season_phase}")
+
+    # ── Paragraph 1 instructions — branch by season phase ────────────────────
+    if season_phase == "playin":
+        if "TYPE 1" in stakes_context:
+            s2_opener = "Tonight's game is not an elimination contest —"
+        elif "TYPE 2" in stakes_context:
+            s2_opener = "It's a WIN-OR-GO-HOME game for both teams —"
+        elif "TYPE 3" in stakes_context:
+            s2_opener = "In a winner-take-all game,"
+        else:
+            s2_opener = "With both teams' seasons on the line,"
+
+        para1_instructions = f"""PARAGRAPH 1 — CONTEXT AND STAKES (PLAY-IN GAME):
+Write exactly 3 sentences, in this order — no more, no fewer:
+  Sentence 1 (opener): Use this exact format —
+    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
+    Records and seeds ONLY. Nothing else in this sentence.
+  Sentence 2 (combined play-in stakes): MUST begin with exactly these words: "{s2_opener}"
+    After that opener, complete the sentence using ONLY the outcomes from STAKES CONTEXT —
+    state who advances and what happens to the loser. One sentence only.
+    FORBIDDEN: "games back", "game back", "games ahead", "game ahead", "behind the #",
+    "ahead of the #", or any phrasing that compares the two seeds by a gap.
+    The regular season is over — seed positions are fixed, gaps are meaningless.
+  Sentence 3 (game frame): one sentence using GAME CONTEXT SIGNALS — streak collision,
+    H2H rematch, or momentum angle. No seed numbers. No positional comparisons.
+
+Rules for all 3 sentences:
+- STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
+- All records and seeds must match STANDINGS exactly.
+- Do NOT write "games remaining" anywhere.
+- Do NOT use effort/desire framing ("striving to", "vying for", "looking to", etc.).
+- This is the only paragraph that may reference both teams together."""
+
+    elif season_phase == "playoffs":
+        para1_instructions = f"""PARAGRAPH 1 — CONTEXT AND STAKES (PLAYOFF GAME):
+Write exactly 3 sentences, in this order — no more, no fewer:
+  Sentence 1 (opener): Use this exact format —
+    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
+    Nothing else in this sentence. No stakes here — records and seeds only.
+  Sentence 2 (playoff stakes): One sentence framing the playoff matchup using STAKES CONTEXT.
+    Do NOT write "games remaining." Do NOT use regular-season stakes language.
+  Sentence 3 (game frame): one sentence using GAME CONTEXT SIGNALS.
+
+Rules:
+- STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
+- All records must match STANDINGS exactly.
+- Do NOT write "games remaining" anywhere.
+- This is the only paragraph that may reference both teams together."""
+
+    else:  # regular season — original instructions, unchanged for future seasons
+        para1_instructions = f"""PARAGRAPH 1 — CONTEXT AND STAKES:
+Write exactly 4 sentences, in this order — no more, no fewer:
+  Sentence 1 (opener): Use this exact format —
+    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
+    Nothing else in this sentence. No stakes summary here — records and seeds only.
+  Sentence 2 ({home_full} stakes): Start with "{home_short}" (not "They", not the full name).
+    Include: streak, games remaining, and the most urgent games-back number from STAKES CONTEXT.
+    PRIORITY: if STAKES CONTEXT lists a RISK number for {home_full}, use that — it is more
+    urgent than UPSIDE. Use UPSIDE only if no RISK exists.
+    One sentence — do NOT mention {home_full}'s games-back situation again after this.
+  Sentence 3 ({away_full} stakes): Start with "{away_short}" (not "They", not the full name).
+    Same structure as sentence 2 but for {away_full}.
+    PRIORITY: use the RISK number from STAKES CONTEXT if one exists for {away_full}.
+    One sentence — do NOT mention {away_full}'s games-back situation again after this.
+  Sentence 4 (game frame): one sentence using GAME CONTEXT SIGNALS — streak collision, H2H
+    rematch, or playoff pressure angle. No new stakes numbers.
+
+Rules for all 4 sentences:
+- STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
+- All records and seeds must match STANDINGS exactly.
+- Use STAKES CONTEXT for all games-back numbers — do NOT invent any.
+- Do NOT use effort/desire framing ("striving to", "vying for", "looking to", etc.).
+- POSITION LABELS: use the exact label from STAKES CONTEXT — "play-in #7", "play-in #8",
+  "direct playoff #6", etc. Do NOT simplify play-in to "playoff spot" or "playoffs".
+  Only say "clinched" if the STAKES CONTEXT label says "clinched".
+- This is the only paragraph that may reference both teams together."""
 
     prompt = f"""You are a professional NBA analyst writing a pre-game briefing for fans.
 Write in clear, factual prose — specific and grounded, not hype.
@@ -425,6 +552,7 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 ─── STANDINGS (verified ESPN — use these numbers only, do not invent) ───
 {home_momentum}
 {away_momentum}
+{"NOTE: STANDINGS shows only streak/form in post-season — records and seeds are NOT shown here to avoid positional comparisons. Use the opener format for records; use STAKES CONTEXT for all outcome language." if season_phase != "regular" else ""}
 
 ─── STAKES CONTEXT (pre-computed from full conference standings) ───
 {stakes_context if stakes_context else "Stakes data unavailable."}
@@ -463,32 +591,7 @@ they have been traded, waived, or released — do NOT mention them under any cir
 
 Write EXACTLY 3 paragraphs, blank line between them. No headers. Do NOT write an injury section.
 
-PARAGRAPH 1 — CONTEXT AND STAKES:
-Write exactly 4 sentences, in this order — no more, no fewer:
-  Sentence 1 (opener): Use this exact format —
-    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
-    Nothing else in this sentence. No stakes summary here — records and seeds only.
-  Sentence 2 ({home_full} stakes): Start with "{home_short}" (not "They", not the full name).
-    Include: streak, games remaining, and the most urgent games-back number from STAKES CONTEXT.
-    PRIORITY: if STAKES CONTEXT lists a RISK number for {home_full}, use that — it is more
-    urgent than UPSIDE. Use UPSIDE only if no RISK exists.
-    One sentence — do NOT mention {home_full}'s games-back situation again after this.
-  Sentence 3 ({away_full} stakes): Start with "{away_short}" (not "They", not the full name).
-    Same structure as sentence 2 but for {away_full}.
-    PRIORITY: use the RISK number from STAKES CONTEXT if one exists for {away_full}.
-    One sentence — do NOT mention {away_full}'s games-back situation again after this.
-  Sentence 4 (game frame): one sentence using GAME CONTEXT SIGNALS — streak collision, H2H
-    rematch, or playoff pressure angle. No new stakes numbers.
-
-Rules for all 4 sentences:
-- STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
-- All records and seeds must match STANDINGS exactly.
-- Use STAKES CONTEXT for all games-back numbers — do NOT invent any.
-- Do NOT use effort/desire framing ("striving to", "vying for", "looking to", etc.).
-- POSITION LABELS: use the exact label from STAKES CONTEXT — "play-in #7", "play-in #8",
-  "direct playoff #6", etc. Do NOT simplify play-in to "playoff spot" or "playoffs".
-  Only say "clinched" if the STAKES CONTEXT label says "clinched".
-- This is the only paragraph that may reference both teams together.
+{para1_instructions}
 
 PARAGRAPH 2 — {home_full}:
 - About {home_full} ONLY. Stats from HOME TEAM STATS section.

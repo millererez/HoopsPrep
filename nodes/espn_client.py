@@ -158,60 +158,69 @@ def fetch_h2h_games(
     t1_name: str, t2_name: str,
 ) -> str:
     """
-    Fetch all COMPLETED regular-season games between t1 and t2 this season
-    directly from the ESPN schedule endpoint.
+    Fetch all COMPLETED games between t1 and t2 this season from the ESPN schedule endpoint.
 
     Returns a formatted multi-line string with exact scores, dates, home team,
     and arena — no LLM involved, no guessing.
 
-    Dates are converted from UTC to US Eastern time (game-night local date).
+    During play-in / playoffs ESPN's default schedule endpoint shifts to post-season
+    events only, so we fall back to &seasontype=2 (regular season) if the first
+    attempt returns no completed H2H games.
     """
-    url = (
+    def _parse_events(data: dict) -> list[str]:
+        lines = []
+        for event in data.get("events", []):
+            comp = event["competitions"][0]
+            if not comp["status"]["type"]["completed"]:
+                continue
+            competitor_ids = [c["team"]["id"] for c in comp["competitors"]]
+            if t2_id not in competitor_ids:
+                continue
+
+            utc_dt     = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
+            local_date = utc_dt.astimezone(EST).strftime("%B %d, %Y")
+
+            venue = comp.get("venue", {})
+            arena = venue.get("fullName", "unknown arena")
+            city  = venue.get("address", {}).get("city", "")
+
+            scores    = {}
+            home_name = ""
+            for c in comp["competitors"]:
+                tid  = c["team"]["id"]
+                name = c["team"]["displayName"]
+                sc   = int(float(c["score"]["displayValue"]))
+                scores[tid] = {"name": name, "score": sc}
+                if c["homeAway"] == "home":
+                    home_name = name
+
+            t1 = scores.get(t1_id, {"name": t1_name, "score": 0})
+            t2 = scores.get(t2_id, {"name": t2_name, "score": 0})
+
+            if t1["score"] > t2["score"]:
+                win_name, win_sc = t1["name"], t1["score"]
+                los_name, los_sc = t2["name"], t2["score"]
+            else:
+                win_name, win_sc = t2["name"], t2["score"]
+                los_name, los_sc = t1["name"], t1["score"]
+
+            lines.append(
+                f"• {local_date}: {win_name} def. {los_name} {win_sc}-{los_sc} "
+                f"| Home team: {home_name} | Arena: {arena}, {city}"
+            )
+        return lines
+
+    base_url = (
         f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
         f"/teams/{t1_id}/schedule?season={ESPN_SEASON_YEAR}"
     )
-    data = espn_fetch(url)
 
-    lines = []
-    for event in data.get("events", []):
-        comp = event["competitions"][0]
-        if not comp["status"]["type"]["completed"]:
-            continue
-        competitor_ids = [c["team"]["id"] for c in comp["competitors"]]
-        if t2_id not in competitor_ids:
-            continue
+    lines = _parse_events(espn_fetch(base_url))
 
-        utc_dt     = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
-        local_date = utc_dt.astimezone(EST).strftime("%B %d, %Y")
-
-        venue = comp.get("venue", {})
-        arena = venue.get("fullName", "unknown arena")
-        city  = venue.get("address", {}).get("city", "")
-
-        scores    = {}
-        home_name = ""
-        for c in comp["competitors"]:
-            tid  = c["team"]["id"]
-            name = c["team"]["displayName"]
-            sc   = int(float(c["score"]["displayValue"]))
-            scores[tid] = {"name": name, "score": sc}
-            if c["homeAway"] == "home":
-                home_name = name
-
-        t1 = scores.get(t1_id, {"name": t1_name, "score": 0})
-        t2 = scores.get(t2_id, {"name": t2_name, "score": 0})
-
-        if t1["score"] > t2["score"]:
-            win_name, win_sc = t1["name"], t1["score"]
-            los_name, los_sc = t2["name"], t2["score"]
-        else:
-            win_name, win_sc = t2["name"], t2["score"]
-            los_name, los_sc = t1["name"], t1["score"]
-
-        lines.append(
-            f"• {local_date}: {win_name} def. {los_name} {win_sc}-{los_sc} "
-            f"| Home team: {home_name} | Arena: {arena}, {city}"
-        )
+    if not lines:
+        # During play-in/playoffs the default endpoint returns only post-season events.
+        # Retry with explicit regular-season filter to surface season-series H2H history.
+        lines = _parse_events(espn_fetch(base_url + "&seasontype=2"))
 
     if not lines:
         return "No completed H2H games found this season."
@@ -284,6 +293,14 @@ def fetch_recent_form(
         e for e in data.get("events", [])
         if e["competitions"][0]["status"]["type"]["completed"]
     ]
+    if not completed:
+        # During play-in/playoffs the default endpoint may return only post-season events
+        # with none completed yet. Fall back to regular-season schedule.
+        data = espn_fetch(url + "&seasontype=2")
+        completed = [
+            e for e in data.get("events", [])
+            if e["competitions"][0]["status"]["type"]["completed"]
+        ]
     recent = completed[-n_games:]
 
     lines = []

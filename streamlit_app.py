@@ -194,6 +194,15 @@ if st.session_state.games is None:
     with st.spinner("Loading tonight's games..."):
         try:
             st.session_state.games = fetch_games()
+        except requests.exceptions.ConnectionError:
+            st.error(
+                "**Server not running.**  \n"
+                "Start the API server first, then click Retry:\n"
+                "```\nuvicorn api:app --reload\n```"
+            )
+            if st.button("Retry", type="secondary"):
+                st.rerun()
+            st.stop()
         except Exception as e:
             st.error(f"Could not load games: {e}")
             st.session_state.games = []
@@ -237,6 +246,12 @@ if submitted:
             st.session_state.report_data = fetch_briefing(selected_game_id)
         except ValueError as e:
             st.error(str(e))
+        except requests.exceptions.ConnectionError:
+            st.error(
+                "**Server not running.**  \n"
+                "Start the API server first, then try again:\n"
+                "```\nuvicorn api:app --reload\n```"
+            )
         except requests.exceptions.Timeout:
             st.error("Request timed out — the server may be overloaded.")
         except Exception as e:

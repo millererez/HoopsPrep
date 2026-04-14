@@ -30,6 +30,7 @@ class GraphState(TypedDict):
     stakes_context: str          # computed: seed consequences + games back/ahead for both teams
     player_team_map: str         # top-5 PPG players per team — guards against cross-team name contamination
     out_players_summary: str     # Python-verified OUT players per team (not LLM-parsed)
+    season_phase: str            # "regular", "playin", or "playoffs" — auto-detected
     narrative_section: str       # LLM — 4-paragraph unified narrative
     review_issues: str           # reviewer checklist output — empty = approved
     final_report: str

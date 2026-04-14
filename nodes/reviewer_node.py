@@ -30,6 +30,7 @@ def reviewer_node(state: GraphState) -> dict:
     recent_form          = state.get("recent_form", "")
     player_team_map      = state.get("player_team_map", "")
     out_players_summary  = state.get("out_players_summary", "")
+    season_phase         = state.get("season_phase", "regular")
 
     if not narrative.strip():
         return {"review_issues": ""}
@@ -42,6 +43,45 @@ def reviewer_node(state: GraphState) -> dict:
     )
 
     banned_str = " | ".join(BANNED_PHRASES)
+
+    # ── Phase-aware CHECK 2 and CHECK 3 ─────────────────────────────────────
+    if season_phase == "regular":
+        check2 = """CHECK 2 — POSITION LABELS:
+  PASS if: play-in teams (#7–#10 in STAKES CONTEXT) are not described as having a "playoff spot"
+  or "making the playoffs" (play-in ≠ direct playoff berth).
+  ISSUE if: a play-in team is described as securing or having a playoff spot. Quote the wrong
+  sentence, then write a broadcast-ready replacement sentence using the exact play-in label from
+  STAKES CONTEXT (e.g., "The [Team] are the play-in #9 seed, 3 games behind the #7 seed.").
+  Format: ISSUE 2: "[wrong sentence]" → Replace with: "[your replacement sentence]"
+  The replacement must be pure broadcast prose — no meta-commentary."""
+
+        check3 = """CHECK 3 — STAKES NUMBERS:
+  PASS if: paragraph 1 includes at least one specific games-back number for EACH team
+  (e.g., "3.5 back of #4", "1.5 ahead of #9", "1 game back of #8"). Both teams must have a number — not just one.
+  NOTE: a sentence like "The Trail Blazers are the play-in #9 seed, 1 game back of the #8 seed"
+  DOES contain a games-back number ("1 game back") — do NOT flag it.
+  If ISSUE 2 already fires for a team's sentence, do NOT also fire ISSUE 3 for the same sentence.
+  ISSUE if: either team's playoff situation is described with no games-back number, even if the
+  other team has one.
+  Format: ISSUE 3: "[exact wrong sentence]" → Replace with: "[rewrite the sentence so it
+  includes the games-back number from STAKES CONTEXT]"
+  The replacement must be pure broadcast prose."""
+    else:
+        # Play-in / playoffs: seed positions are locked — no games-back numbers exist or belong.
+        check2 = """CHECK 2 — POSITION LABELS (PLAY-IN / PLAYOFFS):
+  PASS if: paragraph 1 opener contains only records and seeds with NO positional gap comparison.
+  A correct opener looks like: "The Charlotte Hornets (44-38, #9 East) host the Miami Heat (43-39, #10 East)."
+  ISSUE if: the opener adds any positional comparison — "games back", "games ahead", "behind the #",
+  "ahead of the #", or any gap between the two seeds. Quote the sentence.
+  Format: ISSUE 2: "[wrong sentence]" → Replace with: "[opener using only records and seeds,
+  e.g., 'The Charlotte Hornets (44-38, #9 East) host the Miami Heat (43-39, #10 East).']"
+  Do NOT add any positional gap to the replacement."""
+
+        check3 = """CHECK 3 — STAKES NUMBERS:
+  SKIP — play-in and playoff games use outcome framing (who advances, who is eliminated),
+  not games-back numbers. Do NOT flag the absence of games-back language. Output nothing for this check."""
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     prompt = f"""You are a fact-checker reviewing a pre-game NBA briefing.
 Your ONLY job is to IDENTIFY problems — do not fix or rewrite anything.
@@ -83,29 +123,9 @@ CHECK 1 — DTD NEGATIVE STATEMENT:
   NOTE: if you do NOT find such a sentence, output nothing for this check — do not comment on
   its absence. Silence on CHECK 1 = PASS.
 
-CHECK 2 — POSITION LABELS:
-  PASS if: play-in teams (#7–#10 in STAKES CONTEXT) are not described as having a "playoff spot"
-  or "making the playoffs" (play-in ≠ direct playoff berth).
-  ISSUE if: a play-in team is described as securing or having a playoff spot. Quote the wrong
-  sentence, then write a broadcast-ready replacement sentence using the exact play-in label from
-  STAKES CONTEXT (e.g., "The [Team] are the play-in #9 seed, 3 games behind the #7 seed.").
-  Format: ISSUE 2: "[wrong sentence]" → Replace with: "[your replacement sentence]"
-  The replacement must be pure broadcast prose — no meta-commentary, no "should not be described
-  as", no "should be referred to as". Write what the narrative should say, not what it shouldn't.
+{check2}
 
-CHECK 3 — STAKES NUMBERS:
-  PASS if: paragraph 1 includes at least one specific games-back number for EACH team
-  (e.g., "3.5 back of #4", "1.5 ahead of #9", "1 game back of #8"). Both teams must have a number — not just one.                                     
-  NOTE: a sentence like "The Trail Blazers are the play-in #9 seed, 1 game back of the #8 seed"                                                       
-  DOES contain a games-back number ("1 game back") — do NOT flag it.                                                                                  
-  If ISSUE 2 already fires for a team's sentence, do NOT also fire ISSUE 3 for the same sentence.  
-  ISSUE if: either team's playoff situation is described with no games-back number, even if the
-  other team has one.
-  Format: ISSUE 3: "[exact wrong sentence]" → Replace with: "[rewrite the sentence so it
-  includes the games-back number from STAKES CONTEXT, e.g., 'The Hawks are 4 games behind
-  the #4 seed, which would secure home court in the first round.']"
-  The replacement must be pure broadcast prose — no meta-commentary like "is missing a
-  games-back number". Write what the sentence should say, not what is wrong with it.
+{check3}
 
 CHECK 4 — ATTRIBUTION:
   Step 1: For each team, find the line starting with "Offensive engine:" or "Go-to scorer:"
@@ -202,6 +222,24 @@ No other text. No PASS lines. Only issues or APPROVED."""
                     continue
             filtered4.append(line)
         llm_output = "\n".join(filtered4).strip() or "APPROVED"
+
+    # Python-guard: drop false ISSUE 7 (factless closing) when the quoted sentence
+    # already contains both a player name (two+ capitalised words) and a number.
+    import re as _re4
+    if llm_output != "APPROVED":
+        filtered7: list[str] = []
+        for line in llm_output.splitlines():
+            if _re4.match(r'\s*ISSUE\s+(CHECK\s+)?7\s*:', line, _re4.IGNORECASE):
+                quoted = _re4.search(r'"([^"]+)"', line)
+                if quoted:
+                    sent = quoted.group(1)
+                    has_number = bool(_re4.search(r'\d', sent))
+                    has_name   = bool(_re4.search(r'[A-Z][a-z]+ [A-Z][a-z]+', sent))
+                    if has_number and has_name:
+                        print(f"[Reviewer]  Dropping false CHECK 7 (sentence has name + number): {line.strip()}")
+                        continue
+            filtered7.append(line)
+        llm_output = "\n".join(filtered7).strip() or "APPROVED"
 
     if llm_output == "APPROVED" and not python_issues:
         print("[Reviewer]  APPROVED — no issues found")

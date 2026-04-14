@@ -8,7 +8,7 @@ Fetches standings, player stats, injuries, recent form, and H2H game history.
 import re
 from collections import Counter
 
-from core.state import GraphState, ordinal, extract_teams, parse_home_away
+from core.state import GraphState, ordinal, extract_teams, parse_home_away, ESPN_TEAMS
 from nodes.utils import fmt_num
 from nodes.espn_client import (
     build_standings_lookup,
@@ -359,6 +359,94 @@ def _compute_stakes_context(
 
 
 # ---------------------------------------------------------------------------
+# Post-season stakes helpers
+# ---------------------------------------------------------------------------
+
+def _build_conf_name_map(standings: dict, conf: str) -> dict[int, str]:
+    """Build {conf_seed: full_team_name} for every team in one conference."""
+    _id_to_name = {eid: full for full, (_, eid) in ESPN_TEAMS.items()}
+    result: dict[int, str] = {}
+    for espn_id, info in standings.items():
+        if info.get("conf") == conf:
+            seed = info.get("conf_seed", 0)
+            if seed > 0:
+                result[seed] = _id_to_name.get(espn_id, f"#{seed} seed")
+    return result
+
+
+def _compute_playin_stakes_context(
+    home_full: str,
+    away_full: str,
+    home_seed: int,
+    away_seed: int,
+    conf_name_map: dict[int, str],
+) -> str:
+    """
+    Build a pre-computed stakes signal for a play-in game.
+    Game type is inferred from the two seeds:
+      Type 1 — seeds 7 vs 8:  winner = 7-seed (faces #2); loser drops to game 3
+      Type 2 — seeds 9 vs 10: winner → game 3;             loser eliminated
+      Type 3 — 7/8 vs 9/10:   winner = 8-seed (faces #1); loser eliminated
+    All opponent names come from conf_name_map — no LLM guessing.
+    """
+    seeds = {home_seed, away_seed}
+
+    if seeds == {7, 8}:
+        seed2  = conf_name_map.get(2, "the 2-seed")
+        seed9  = conf_name_map.get(9, "the 9-seed")
+        seed10 = conf_name_map.get(10, "the 10-seed")
+        return (
+            f"PLAY-IN GAME TYPE 1 (7 vs 8)\n"
+            f"Outcome — winner: advances as the 7-seed to face the {seed2} in the first round of the playoffs.\n"
+            f"Outcome — loser: drops to a second-chance game against the winner of the {seed9}–{seed10} matchup.\n"
+            f"Both teams survive a loss — this is NOT an elimination game.\n"
+            f"INSTRUCTION: write ONE combined sentence covering both teams' stakes (not two separate sentences)."
+        )
+
+    if seeds == {9, 10}:
+        seed7 = conf_name_map.get(7, "the 7-seed")
+        seed8 = conf_name_map.get(8, "the 8-seed")
+        return (
+            f"PLAY-IN GAME TYPE 2 (9 vs 10) — ELIMINATION GAME\n"
+            f"Outcome — winner: advances to a second-chance game against the loser of the {seed7}–{seed8} matchup.\n"
+            f"Outcome — loser: season is over, immediately eliminated.\n"
+            f"Both teams are one loss from going home.\n"
+            f"INSTRUCTION: write ONE combined sentence covering both teams' stakes (not two separate sentences)."
+        )
+
+    # Game type 3: one team from seeds 7/8 (lost game 1), one from 9/10 (won game 2)
+    if home_seed in {7, 8}:
+        home_context = "who dropped their opening play-in game"
+        away_context = "who advanced from the 9-10 game"
+    else:
+        home_context = "who advanced from the 9-10 game"
+        away_context = "who dropped their opening play-in game"
+    seed1 = conf_name_map.get(1, "the 1-seed")
+    return (
+        f"PLAY-IN GAME TYPE 3 — WIN-OR-GO-HOME\n"
+        f"{home_full}: {home_context}.\n"
+        f"{away_full}: {away_context}.\n"
+        f"Outcome — winner: clinches the 8-seed and faces the {seed1} in the first round of the playoffs.\n"
+        f"Outcome — loser: season is over, immediately eliminated.\n"
+        f"INSTRUCTION: write ONE combined sentence covering both teams' stakes. "
+        f"Name which team came from which game using the context lines above."
+    )
+
+
+def _compute_playoff_stakes_context(home_full: str, away_full: str) -> str:
+    """
+    Placeholder for playoff stakes — to be fleshed out once the playoffs begin
+    and the ESPN series API response format is confirmed.
+    """
+    return (
+        f"PLAYOFF GAME\n"
+        f"{home_full} vs {away_full} — first-round playoff matchup.\n"
+        f"Regular season standings and games-back no longer apply.\n"
+        f"INSTRUCTION: Frame paragraph 1 around the playoff matchup context."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
 
@@ -588,19 +676,56 @@ def data_specialist_node(state: GraphState) -> dict:
 
     recent_form = "\n\n".join(form_parts)
 
-    # ── Compute stakes context for both teams ────────────────────────────────
-    stakes_parts = []
-    for full_name, _, espn_id in teams:
-        info = standings.get(espn_id, {})
-        stakes_parts.append(_compute_stakes_context(
-            full_name  = full_name,
-            seed       = info.get("conf_seed", 0),
-            conf       = info.get("conf", ""),
-            wins       = info.get("wins", 0),
-            losses     = info.get("losses", 0),
-            standings  = standings,
-        ))
-    stakes_context = "\n".join(stakes_parts)
+    # ── Detect season phase + compute stakes context ─────────────────────────
+    season_phase = "regular"
+    stakes_context = ""
+    if len(teams) == 2:
+        home_full_s, _, home_id_s = teams[0]
+        away_full_s, _, away_id_s = teams[1]
+        home_info_s = standings.get(home_id_s, {})
+        away_info_s = standings.get(away_id_s, {})
+        home_seed_s = home_info_s.get("conf_seed", 0)
+        away_seed_s = away_info_s.get("conf_seed", 0)
+        home_conf_s = home_info_s.get("conf", "")
+        away_conf_s = away_info_s.get("conf", "")
+        home_gr_s   = 82 - home_info_s.get("wins", 0) - home_info_s.get("losses", 0)
+        away_gr_s   = 82 - away_info_s.get("wins", 0) - away_info_s.get("losses", 0)
+
+        if home_gr_s > 0 or away_gr_s > 0:
+            season_phase = "regular"
+        elif (home_conf_s == away_conf_s
+              and 7 <= home_seed_s <= 10 and 7 <= away_seed_s <= 10):
+            season_phase = "playin"
+        else:
+            season_phase = "playoffs"
+
+        print(f"[DataSpecialist]    Season phase detected: {season_phase}")
+
+        if season_phase == "playin":
+            conf_name_map = _build_conf_name_map(standings, home_conf_s)
+            stakes_context = _compute_playin_stakes_context(
+                home_full=home_full_s,
+                away_full=away_full_s,
+                home_seed=home_seed_s,
+                away_seed=away_seed_s,
+                conf_name_map=conf_name_map,
+            )
+        elif season_phase == "playoffs":
+            stakes_context = _compute_playoff_stakes_context(home_full_s, away_full_s)
+        else:
+            # Regular season — original per-team logic, preserved for future seasons
+            stakes_parts = []
+            for full_name, _, espn_id in teams:
+                info = standings.get(espn_id, {})
+                stakes_parts.append(_compute_stakes_context(
+                    full_name = full_name,
+                    seed      = info.get("conf_seed", 0),
+                    conf      = info.get("conf", ""),
+                    wins      = info.get("wins", 0),
+                    losses    = info.get("losses", 0),
+                    standings = standings,
+                ))
+            stakes_context = "\n".join(stakes_parts)
 
     # ── Build player-team map (top 5 PPG per team, active only) ────────────────
     map_lines = []
@@ -620,4 +745,5 @@ def data_specialist_node(state: GraphState) -> dict:
         "stakes_context":      stakes_context,
         "player_team_map":     player_team_map,
         "out_players_summary": out_players_summary,
+        "season_phase":        season_phase,
     }
