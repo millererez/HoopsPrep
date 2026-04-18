@@ -38,22 +38,47 @@ def fetch_briefing(game_id: str) -> dict:
     return resp.json()
 
 
-def parse_report(report: str) -> tuple[str, str, str, str]:
-    """Split report into (narrative, injury_block, h2h_block, stats_block)."""
+def parse_report(report: str) -> tuple[str, str, str, str, str]:
+    """Split report into (narrative, injury_block, h2h_block, stats_block, h2h_title)."""
     if "\n\nInjury Report:\n\n" in report:
         narrative, rest = report.split("\n\nInjury Report:\n\n", 1)
     else:
-        return report, "", "", ""
+        return report, "", "", "", "H2H This Season"
 
-    if "\n\nH2H This Season:\n\n" in rest:
-        injury_block, rest = rest.split("\n\nH2H This Season:\n\n", 1)
+    # Handle both regular-season and playoff labels
+    h2h_title = "H2H This Season"
+    h2h_delimiter = None
+    for delim, title in (
+        ("\n\nH2H This Season:\n\n", "H2H This Season"),
+        ("\n\nSeries So Far:\n\n",   "Series So Far"),
+    ):
+        if delim in rest:
+            h2h_delimiter = delim
+            h2h_title = title
+            break
+
+    if h2h_delimiter:
+        injury_block, rest = rest.split(h2h_delimiter, 1)
     else:
         injury_block, rest = rest, ""
 
     parts = rest.split("\n\n### ", 1)
-    h2h_block   = parts[0]
+    
+    h2h_block   = parts[0].strip() 
     stats_block = ("### " + parts[1]) if len(parts) > 1 else ""
-    return narrative, injury_block, h2h_block, stats_block
+    
+    if "Game " in narrative or "play-in" in narrative.lower():
+        h2h_title = "Regular Season Matchups" if "Game 1 " in narrative else "Series So Far"
+        
+        import re
+        if "Game 1 " in narrative:
+            h2h_block = re.sub(r"^Series So Far.*?:\s*", "", h2h_block, flags=re.IGNORECASE).strip()
+            h2h_block = re.sub(r"^H2H This Season.*?:\s*", "", h2h_block, flags=re.IGNORECASE).strip()
+            
+        stats_block = re.sub(r"\s*\|\s*Streak:.*?Last 10:\s*[\d-]+", "", stats_block, flags=re.IGNORECASE)
+    # ──────────────────────────────
+
+    return narrative, injury_block, h2h_block, stats_block, h2h_title
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -265,10 +290,48 @@ if submitted:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def section_card(title: str, content: str, accent: str, icon: str = ""):
-    """Render a styled card with a colored left-border accent."""
-    # escape any < > in the content for safe HTML injection, but keep newlines
+    """Render a styled card with a colored left-border accent, parsing markdown tables to HTML."""
     import html as _html
-    safe_content = _html.escape(content)
+    
+    # Parse markdown tables to HTML so they render correctly inside the div
+    lines = content.strip().split('\n')
+    parsed_lines = []
+    in_table = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Check if the line is part of a markdown table
+        if stripped.startswith('|') and stripped.endswith('|'):
+            if not in_table:
+                parsed_lines.append('<table>')
+                in_table = True
+            
+            # Skip the markdown separator line
+            if '|---' in stripped:
+                continue
+                
+            # Extract cells and escape special characters safely
+            cells = [_html.escape(c.strip()) for c in stripped.split('|')[1:-1]]
+            
+            # Treat the first row as headers
+            if parsed_lines[-1] == '<table>':
+                parsed_lines.append('<tr>' + ''.join(f'<th>{c}</th>' for c in cells) + '</tr>')
+            else:
+                parsed_lines.append('<tr>' + ''.join(f'<td>{c}</td>' for c in cells) + '</tr>')
+        else:
+            if in_table:
+                parsed_lines.append('</table>')
+                in_table = False
+                
+            # Append standard text with a line break instead of relying on pre-wrap
+            parsed_lines.append(_html.escape(line) + '<br>')
+    
+    if in_table:
+        parsed_lines.append('</table>')
+        
+    safe_content = '\n'.join(parsed_lines)
+
     st.markdown(f"""
 <div style="
     background: #1a2535;
@@ -281,7 +344,9 @@ def section_card(title: str, content: str, accent: str, icon: str = ""):
               text-transform: uppercase; color: {accent}; margin-bottom: 0.8rem;">
     {icon}&nbsp; {title}
   </div>
-  <div style="color: #e8eaf0; line-height: 1.75; white-space: pre-wrap; font-size: 0.97rem;">{safe_content}</div>
+  <div style="color: #e8eaf0; line-height: 1.75; font-size: 0.97rem;">
+    {safe_content}
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -290,7 +355,7 @@ def section_card(title: str, content: str, accent: str, icon: str = ""):
 
 if "report_data" in st.session_state:
     data = st.session_state.report_data
-    narrative, injury_block, h2h_block, stats_block = parse_report(data["report"])
+    narrative, injury_block, h2h_block, stats_block, h2h_title = parse_report(data["report"])
 
     # Matchup header
     st.markdown(f"""
@@ -313,9 +378,9 @@ if "report_data" in st.session_state:
     if injury_block:
         section_card("Injury Report", injury_block, accent="#F59E0B", icon="🩹")
 
-    # H2H card
+    # H2H / Series card
     if h2h_block:
-        section_card("H2H This Season", h2h_block, accent="#3B82F6", icon="📊")
+        section_card(h2h_title, h2h_block, accent="#3B82F6", icon="📊")
 
     # Stats — label then markdown (can't nest st.markdown inside an HTML div)
     if stats_block:

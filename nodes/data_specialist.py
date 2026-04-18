@@ -6,7 +6,22 @@ Fetches standings, player stats, injuries, recent form, and H2H game history.
 """
 
 import re
+import json
+import os
 from collections import Counter
+
+# ---------------------------------------------------------------------------
+# Playoff history (static JSON — loaded once at import time)
+# ---------------------------------------------------------------------------
+
+_PLAYOFF_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "playoff_history.json")
+try:
+    with open(_PLAYOFF_HISTORY_PATH, "r", encoding="utf-8") as _f:
+        _PLAYOFF_HISTORY: dict = json.load(_f)
+except Exception:
+    _PLAYOFF_HISTORY = {}
+
+_PLAYOFF_ROUND_LABEL = "first round"   # hardcoded until ESPN series API is confirmed live
 
 from core.state import GraphState, ordinal, extract_teams, parse_home_away, ESPN_TEAMS
 from nodes.utils import fmt_num
@@ -31,6 +46,8 @@ def _analyze_form(
     season_star: tuple[str, float] | None = None,
     season_ppg_lookup: dict[str, float] | None = None,
     out_star: tuple[str, float] | None = None,
+    season_phase: str = "regular",
+    series_opponent: str = "",
 ) -> str:
     """
     Pre-analyze recent form lines and return a structured summary for the composer.
@@ -44,14 +61,22 @@ def _analyze_form(
     scorer_opps: dict[str, list[str]] = {}
     scorer_dates: dict[str, list[str]] = {}
     recent_results = []
+    _series_game_counter = 0   # counts series games seen so far (for "Game N" labels)
 
     for line in form_lines:
         date_m   = re.search(r'^(\w+ \d+)\s+vs', line)
         opp_m    = re.search(r'vs ([A-Za-z ]+?) \(', line)
         result_m = re.search(r'\((W|L)\s+\d+-\d+\)', line)
         scorer_m = re.search(r':\s+(.+?)\s+(\d+)\s+pts', line)
-        opp  = opp_m.group(1) if opp_m else ""
+        raw_opp = opp_m.group(1) if opp_m else ""
         date = date_m.group(1) if date_m else ""
+        # In playoffs, replace series opponent with "Game N" label
+        if (season_phase == "playoffs" and series_opponent
+                and raw_opp.strip().lower() == series_opponent.strip().lower()):
+            _series_game_counter += 1
+            opp = f"Game {_series_game_counter}"
+        else:
+            opp = raw_opp
         if result_m:
             if result_m.group(1) == "W":
                 wins += 1
@@ -113,12 +138,20 @@ def _analyze_form(
         top2 = sorted(zip(pts_list, opps_list, dates_list), key=lambda x: -x[0])[:2]
         top2 = [(pts, opp, date) for pts, opp, date in top2 if opp.strip()]
         _use_dates = len({opp for _, opp, _ in top2}) < len(top2)  # True if duplicate opponent
+
+        def _ref(pts: int, opp: str, date: str, use_date: bool) -> str:
+            """Format a single game reference, playoff-aware."""
+            if opp.startswith("Game "):
+                return f"{pts} in {opp}" + (f" ({date})" if use_date else "")
+            return (f"{pts} on {date} against the {opp}" if use_date
+                    else f"{pts} against the {opp}")
+
         verbatim = f"{top_name} scored " + " and ".join(
-            (f"{pts} on {date} against the {opp}" if _use_dates else f"{pts} against the {opp}")
-            for pts, opp, date in top2
+            _ref(pts, opp, date, _use_dates) for pts, opp, date in top2
         ) + "."
         per_game_str = " and ".join(
-            f"{pts} pts vs {opp} ({date})" for pts, opp, date in zip(pts_list, opps_list, dates_list)
+            f"{pts} pts {'in' if opp.startswith('Game ') else 'vs'} {opp} ({date})"
+            for pts, opp, date in zip(pts_list, opps_list, dates_list)
         )
         if top_count >= round(total * 0.6):
             bullets.append(
@@ -170,11 +203,11 @@ def _analyze_form(
                 top2_star = sorted(zip(star_pts, star_opps, star_dates), key=lambda x: -x[0])[:2]
                 _use_dates_star = len({opp for _, opp, _ in top2_star}) < len(top2_star)
                 verbatim_star = f"{star_name} scored " + " and ".join(
-                    (f"{pts} on {date} against the {opp}" if _use_dates_star else f"{pts} against the {opp}")
-                    for pts, opp, date in top2_star
+                    _ref(pts, opp, date, _use_dates_star) for pts, opp, date in top2_star
                 ) + "."
                 per_game_str = " and ".join(
-                    f"{pts} pts vs {opp} ({date})" for pts, opp, date in zip(star_pts, star_opps, star_dates)
+                    f"{pts} pts {'in' if opp.startswith('Game ') else 'vs'} {opp} ({date})"
+                    for pts, opp, date in zip(star_pts, star_opps, star_dates)
                 )
                 bullets.append(
                     f"  • Offensive engine: {star_name} ({fmt_num(star_ppg)} PPG season) — "
@@ -433,17 +466,164 @@ def _compute_playin_stakes_context(
     )
 
 
-def _compute_playoff_stakes_context(home_full: str, away_full: str) -> str:
+def _playoff_history_sentence(team_a: str, team_b: str) -> str:
     """
-    Placeholder for playoff stakes — to be fleshed out once the playoffs begin
-    and the ESPN series API response format is confirmed.
+    Look up the last 10 years of playoff history for this pair and return a
+    broadcast-ready sentence, or "" if no prior meetings found.
     """
+    key1 = f"{team_a}|{team_b}"
+    key2 = f"{team_b}|{team_a}"
+    history = _PLAYOFF_HISTORY.get(key1, []) or _PLAYOFF_HISTORY.get(key2, [])
+    if not history:
+        return ""
+    history = sorted(history, key=lambda x: x["year"], reverse=True)
+    most_recent = history[0]
+    wins_a = sum(1 for s in history if s["winner"] == team_a)
+    wins_b = sum(1 for s in history if s["winner"] == team_b)
+    year   = most_recent["year"]
+    winner = most_recent["winner"]
+    games  = most_recent["games"]
+    round_ = most_recent["round"]
+    if len(history) == 1:
+        return (
+            f"The two teams last met in the playoffs in {year} ({round_}), "
+            f"when {winner} won in {games} games."
+        )
+    if wins_a == wins_b:
+        return (
+            f"The all-time playoff series is tied {wins_a}-{wins_b}; "
+            f"they last met in {year} ({round_}), when {winner} won in {games} games."
+        )
+    # ------------------------------------------------
+    leader = team_a if wins_a > wins_b else team_b
+    lead   = max(wins_a, wins_b)
+    trail  = min(wins_a, wins_b)
     return (
-        f"PLAYOFF GAME\n"
-        f"{home_full} vs {away_full} — first-round playoff matchup.\n"
-        f"Regular season standings and games-back no longer apply.\n"
-        f"INSTRUCTION: Frame paragraph 1 around the playoff matchup context."
+        f"{leader} lead the all-time playoff series {lead}-{trail}; "
+        f"they last met in {year} ({round_}), when {winner} won in {games} games."
     )
+
+
+def _parse_series_from_h2h(
+    h2h_text: str,
+    home_full: str,
+    away_full: str,
+) -> tuple[int, int, int]:
+    """
+    Parse completed series games from h2h_text.
+    Returns (home_wins, away_wins, games_played).
+    """
+    home_wins = away_wins = 0
+    for line in h2h_text.splitlines():
+        m = re.search(r"([\w ]+?) def\. ([\w ]+?) \d+-\d+", line)
+        if not m:
+            continue
+        winner = m.group(1).strip()
+        if winner == home_full:
+            home_wins += 1
+        elif winner == away_full:
+            away_wins += 1
+    return home_wins, away_wins, home_wins + away_wins
+
+
+def _home_court_next_game(game_number: int, higher_seed_full: str, lower_seed_full: str) -> str:
+    """
+    Return team name hosting game_number+1 in a 2-2-1-1-1 NBA playoff series.
+    Higher seed hosts games 1, 2, 5, 7; lower seed hosts games 3, 4, 6.
+    """
+    next_game = game_number + 1
+    if next_game > 7:
+        return ""
+    higher_seed_games = {1, 2, 5, 7}
+    if next_game in higher_seed_games:
+        return higher_seed_full
+    return lower_seed_full
+
+
+def _compute_playoff_stakes_context(
+    home_full: str,
+    away_full: str,
+    home_seed: int,
+    away_seed: int,
+    h2h_text: str,
+    home_info: dict,
+    away_info: dict,
+) -> str:
+    """
+    Build a structured playoff stakes context string.
+    Parses series state from h2h_text (completed games), derives game number,
+    elimination flag, home court for next game, and playoff history.
+    """
+    home_wins, away_wins, games_played = _parse_series_from_h2h(h2h_text, home_full, away_full)
+    game_number = games_played + 1
+
+    # Determine higher/lower seed
+    if home_seed <= away_seed:
+        higher_seed_full, lower_seed_full = home_full, away_full
+        higher_seed = home_seed
+        lower_seed  = away_seed
+    else:
+        higher_seed_full, lower_seed_full = away_full, home_full
+        higher_seed = away_seed
+        lower_seed  = home_seed
+
+    # Round label — seed-sum heuristic; hardcoded fallback
+    if home_seed + away_seed == 9:
+        round_label = "first round"
+    else:
+        round_label = _PLAYOFF_ROUND_LABEL
+
+    # Series state
+    if home_wins > away_wins:
+        leader_full, leader_wins = home_full, home_wins
+        trailer_full, trailer_wins = away_full, away_wins
+    elif away_wins > home_wins:
+        leader_full, leader_wins = away_full, away_wins
+        trailer_full, trailer_wins = home_full, home_wins
+    else:
+        leader_full = leader_wins = None
+        trailer_full = trailer_wins = None
+
+    if leader_full:
+        series_str = f"{leader_full} leads {leader_wins}-{trailer_wins}"
+    else:
+        series_str = f"Tied {home_wins}-{away_wins}"
+
+    # Elimination flag: a team faces elimination when the other has 3 wins
+    elimination = max(home_wins, away_wins) == 3
+
+    # Home court for next game (only relevant if series continues)
+    next_host = _home_court_next_game(game_number, higher_seed_full, lower_seed_full)
+    home_court_next = f"Home court Game {game_number + 1}: {next_host}" if next_host else ""
+
+    # PPG ranks
+    home_ppg_r = home_info.get("ppg_rank", "?")
+    away_ppg_r = away_info.get("ppg_rank", "?")
+    home_def_r = home_info.get("def_rank", "?")
+    away_def_r = away_info.get("def_rank", "?")
+
+    # Playoff history sentence
+    history_sentence = _playoff_history_sentence(home_full, away_full)
+
+    lines = [
+        "PLAYOFF GAME",
+        f"Round: {round_label}",
+        f"Game: {game_number}",
+        f"Series: {series_str}",
+        f"Higher seed: {higher_seed_full} (#{higher_seed})",
+        f"Lower seed: {lower_seed_full} (#{lower_seed})",
+        f"Elimination game: {'YES' if elimination else 'NO'}",
+    ]
+    if home_court_next:
+        lines.append(home_court_next)
+    lines.append(f"Playoff history: {history_sentence if history_sentence else 'No meetings in the last 10 years.'}")
+    lines.append(
+        f"Offense ranks: {home_full} {ordinal(home_ppg_r)} PPG | {away_full} {ordinal(away_ppg_r)} PPG"
+    )
+    lines.append(
+        f"Defense ranks: {home_full} {ordinal(home_def_r)} Opp-PPG | {away_full} {ordinal(away_def_r)} Opp-PPG"
+    )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +822,31 @@ def data_specialist_node(state: GraphState) -> dict:
             season_stars[espn_id] = (star["name"], float(star["ppg"]))
             season_ppg_by_team[espn_id] = {p["name"]: float(p["ppg"]) for p in team_roster}
 
+    # ── Early season-phase detection (needed before form analysis) ──────────
+    _early_phase = "regular"
+    if len(teams) == 2:
+        _h_full, _, _h_id = teams[0]
+        _a_full, _, _a_id = teams[1]
+        _h_info = standings.get(_h_id, {})
+        _a_info = standings.get(_a_id, {})
+        _h_gr   = 82 - _h_info.get("wins", 0) - _h_info.get("losses", 0)
+        _a_gr   = 82 - _a_info.get("wins", 0) - _a_info.get("losses", 0)
+        _h_seed = _h_info.get("conf_seed", 0)
+        _a_seed = _a_info.get("conf_seed", 0)
+        _h_conf = _h_info.get("conf", "")
+        _a_conf = _a_info.get("conf", "")
+        if _h_gr > 0 or _a_gr > 0:
+            _early_phase = "regular"
+        elif _h_conf == _a_conf and 7 <= _h_seed <= 10 and 7 <= _a_seed <= 10:
+            _early_phase = "playin"
+        else:
+            _early_phase = "playoffs"
+    # Map espn_id → series opponent full name (used in form analysis)
+    _series_opp_by_id: dict[str, str] = {}
+    #if len(teams) == 2 and _early_phase == "playoffs":
+    #    _series_opp_by_id[teams[0][2]] = teams[1][0]
+    #    _series_opp_by_id[teams[1][2]] = teams[0][0]
+
     # ── Fetch recent form (last 5 games, OUT players excluded) ──────────────
     form_parts = []
     for full_name, _, espn_id in teams:
@@ -663,6 +868,8 @@ def data_specialist_node(state: GraphState) -> dict:
                     season_star=season_stars.get(espn_id),
                     season_ppg_lookup=season_ppg_by_team.get(espn_id),
                     out_star=out_stars.get(espn_id),
+                    season_phase=_early_phase,
+                    series_opponent=_series_opp_by_id.get(espn_id, ""),
                 )
                 form_parts.append(
                     f"### {full_name} Recent Form — ANALYSIS ONLY (do NOT use raw game lines)\n"
@@ -711,21 +918,32 @@ def data_specialist_node(state: GraphState) -> dict:
                 conf_name_map=conf_name_map,
             )
         elif season_phase == "playoffs":
-            stakes_context = _compute_playoff_stakes_context(home_full_s, away_full_s)
-        else:
-            # Regular season — original per-team logic, preserved for future seasons
-            stakes_parts = []
-            for full_name, _, espn_id in teams:
-                info = standings.get(espn_id, {})
-                stakes_parts.append(_compute_stakes_context(
-                    full_name = full_name,
-                    seed      = info.get("conf_seed", 0),
-                    conf      = info.get("conf", ""),
-                    wins      = info.get("wins", 0),
-                    losses    = info.get("losses", 0),
-                    standings = standings,
-                ))
-            stakes_context = "\n".join(stakes_parts)
+            from nodes.espn_client import fetch_espn_series_debug
+            fetch_espn_series_debug(home_id_s, away_id_s)
+            
+            playoff_h2h = fetch_h2h_games(home_id_s, away_id_s, home_full_s, away_full_s, postseason_only=True)
+
+            stakes_context = _compute_playoff_stakes_context(
+                home_full  = home_full_s,
+                away_full  = away_full_s,
+                home_seed  = home_seed_s,
+                away_seed  = away_seed_s,
+                h2h_text   = playoff_h2h, 
+                home_info  = home_info_s,
+                away_info  = away_info_s,
+            )
+            
+            if "Game: 1\n" in stakes_context:
+                print("[DataSpecialist]    Game 1 detected! Fetching regular season H2H fallback...")
+                try:
+                    # Fetch regular season matchups as fallback for Game 1
+                    h2h_text = fetch_h2h_games(home_id_s, away_id_s, home_full_s, away_full_s)
+                except Exception as exc:
+                    print(f"[DataSpecialist]    Failed to fetch regular season fallback: {exc}")
+                    h2h_text = "No completed H2H games found this season."
+            else:
+                # Game 2 or later - use strict playoff H2H results
+                h2h_text = playoff_h2h
 
     # ── Build player-team map (top 5 PPG per team, active only) ────────────────
     map_lines = []

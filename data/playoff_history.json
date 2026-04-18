@@ -1,0 +1,292 @@
+{
+  "Atlanta Hawks|Boston Celtics": [
+    {"year": 2023, "winner": "Boston Celtics",    "loser": "Atlanta Hawks",    "games": 6, "round": "first round"}
+  ],
+  "Atlanta Hawks|Cleveland Cavaliers": [
+    {"year": 2016, "winner": "Cleveland Cavaliers","loser": "Atlanta Hawks",    "games": 4, "round": "conference semifinals"},
+    {"year": 2015, "winner": "Cleveland Cavaliers","loser": "Atlanta Hawks",    "games": 4, "round": "conference finals"}
+  ],
+  "Atlanta Hawks|Miami Heat": [
+    {"year": 2022, "winner": "Miami Heat",         "loser": "Atlanta Hawks",    "games": 5, "round": "first round"},
+    {"year": 2021, "winner": "Atlanta Hawks",      "loser": "Miami Heat",       "games": 4, "round": "first round"}
+  ],
+  "Atlanta Hawks|Milwaukee Bucks": [
+    {"year": 2021, "winner": "Milwaukee Bucks",    "loser": "Atlanta Hawks",    "games": 6, "round": "conference finals"}
+  ],
+  "Atlanta Hawks|New York Knicks": [
+    {"year": 2021, "winner": "Atlanta Hawks",      "loser": "New York Knicks",  "games": 5, "round": "first round"}
+  ],
+  "Atlanta Hawks|Philadelphia 76ers": [
+    {"year": 2021, "winner": "Atlanta Hawks",      "loser": "Philadelphia 76ers","games": 7, "round": "conference semifinals"}
+  ],
+  "Boston Celtics|Brooklyn Nets": [
+    {"year": 2021, "winner": "Brooklyn Nets",      "loser": "Boston Celtics",   "games": 5, "round": "first round"}
+  ],
+  "Boston Celtics|Cleveland Cavaliers": [
+    {"year": 2024, "winner": "Boston Celtics",     "loser": "Cleveland Cavaliers","games": 5, "round": "conference semifinals"},
+    {"year": 2018, "winner": "Cleveland Cavaliers","loser": "Boston Celtics",   "games": 7, "round": "conference finals"},
+    {"year": 2017, "winner": "Cleveland Cavaliers","loser": "Boston Celtics",   "games": 5, "round": "conference finals"}
+  ],
+  "Boston Celtics|Dallas Mavericks": [
+    {"year": 2024, "winner": "Boston Celtics",     "loser": "Dallas Mavericks", "games": 5, "round": "finals"}
+  ],
+  "Boston Celtics|Indiana Pacers": [
+    {"year": 2024, "winner": "Boston Celtics",     "loser": "Indiana Pacers",   "games": 4, "round": "conference finals"},
+    {"year": 2019, "winner": "Boston Celtics",     "loser": "Indiana Pacers",   "games": 4, "round": "first round"},
+    {"year": 2018, "winner": "Boston Celtics",     "loser": "Indiana Pacers",   "games": 7, "round": "first round"}
+  ],
+  "Boston Celtics|Miami Heat": [
+    {"year": 2024, "winner": "Boston Celtics",     "loser": "Miami Heat",       "games": 5, "round": "first round"},
+    {"year": 2023, "winner": "Miami Heat",         "loser": "Boston Celtics",   "games": 7, "round": "conference finals"},
+    {"year": 2022, "winner": "Boston Celtics",     "loser": "Miami Heat",       "games": 7, "round": "conference finals"},
+    {"year": 2020, "winner": "Miami Heat",         "loser": "Boston Celtics",   "games": 6, "round": "conference finals"}
+  ],
+  "Boston Celtics|Milwaukee Bucks": [
+    {"year": 2022, "winner": "Boston Celtics",     "loser": "Milwaukee Bucks",  "games": 7, "round": "conference semifinals"},
+    {"year": 2019, "winner": "Milwaukee Bucks",    "loser": "Boston Celtics",   "games": 5, "round": "conference semifinals"},
+    {"year": 2018, "winner": "Boston Celtics",     "loser": "Milwaukee Bucks",  "games": 7, "round": "first round"}
+  ],
+  "Boston Celtics|Philadelphia 76ers": [
+    {"year": 2023, "winner": "Boston Celtics",     "loser": "Philadelphia 76ers","games": 7, "round": "conference semifinals"},
+    {"year": 2020, "winner": "Boston Celtics",     "loser": "Philadelphia 76ers","games": 4, "round": "first round"},
+    {"year": 2018, "winner": "Boston Celtics",     "loser": "Philadelphia 76ers","games": 5, "round": "conference semifinals"}
+  ],
+  "Boston Celtics|Toronto Raptors": [
+    {"year": 2020, "winner": "Boston Celtics",     "loser": "Toronto Raptors",  "games": 7, "round": "conference semifinals"},
+    {"year": 2019, "winner": "Toronto Raptors",    "loser": "Boston Celtics",   "games": 4, "round": "conference semifinals"}
+  ],
+  "Brooklyn Nets|Milwaukee Bucks": [
+    {"year": 2021, "winner": "Milwaukee Bucks",    "loser": "Brooklyn Nets",    "games": 7, "round": "conference semifinals"}
+  ],
+  "Brooklyn Nets|Philadelphia 76ers": [
+    {"year": 2023, "winner": "Philadelphia 76ers", "loser": "Brooklyn Nets",    "games": 4, "round": "first round"}
+  ],
+  "Brooklyn Nets|Toronto Raptors": [
+    {"year": 2020, "winner": "Toronto Raptors",    "loser": "Brooklyn Nets",    "games": 4, "round": "first round"}
+  ],
+  "Chicago Bulls|Milwaukee Bucks": [
+    {"year": 2022, "winner": "Milwaukee Bucks",    "loser": "Chicago Bulls",    "games": 5, "round": "first round"}
+  ],
+  "Cleveland Cavaliers|Detroit Pistons": [
+    {"year": 2016, "winner": "Cleveland Cavaliers","loser": "Detroit Pistons",  "games": 4, "round": "first round"}
+  ],
+  "Cleveland Cavaliers|Golden State Warriors": [
+    {"year": 2018, "winner": "Golden State Warriors","loser": "Cleveland Cavaliers","games": 4, "round": "finals"},
+    {"year": 2017, "winner": "Golden State Warriors","loser": "Cleveland Cavaliers","games": 5, "round": "finals"},
+    {"year": 2016, "winner": "Cleveland Cavaliers","loser": "Golden State Warriors","games": 7, "round": "finals"},
+    {"year": 2015, "winner": "Golden State Warriors","loser": "Cleveland Cavaliers","games": 6, "round": "finals"}
+  ],
+  "Cleveland Cavaliers|Indiana Pacers": [
+    {"year": 2018, "winner": "Cleveland Cavaliers","loser": "Indiana Pacers",   "games": 7, "round": "first round"},
+    {"year": 2017, "winner": "Cleveland Cavaliers","loser": "Indiana Pacers",   "games": 4, "round": "first round"}
+  ],
+  "Cleveland Cavaliers|Orlando Magic": [
+    {"year": 2024, "winner": "Cleveland Cavaliers","loser": "Orlando Magic",    "games": 7, "round": "first round"}
+  ],
+  "Cleveland Cavaliers|Toronto Raptors": [
+    {"year": 2018, "winner": "Cleveland Cavaliers","loser": "Toronto Raptors",  "games": 4, "round": "conference semifinals"},
+    {"year": 2016, "winner": "Cleveland Cavaliers","loser": "Toronto Raptors",  "games": 6, "round": "conference finals"}
+  ],
+  "Dallas Mavericks|Golden State Warriors": [
+    {"year": 2022, "winner": "Golden State Warriors","loser": "Dallas Mavericks","games": 5, "round": "conference finals"}
+  ],
+  "Dallas Mavericks|LA Clippers": [
+    {"year": 2024, "winner": "Dallas Mavericks",  "loser": "LA Clippers",      "games": 6, "round": "first round"},
+    {"year": 2021, "winner": "LA Clippers",       "loser": "Dallas Mavericks", "games": 7, "round": "first round"},
+    {"year": 2020, "winner": "LA Clippers",       "loser": "Dallas Mavericks", "games": 6, "round": "first round"}
+  ],
+  "Dallas Mavericks|Minnesota Timberwolves": [
+    {"year": 2024, "winner": "Dallas Mavericks",  "loser": "Minnesota Timberwolves","games": 5, "round": "conference finals"}
+  ],
+  "Dallas Mavericks|Oklahoma City Thunder": [
+    {"year": 2024, "winner": "Dallas Mavericks",  "loser": "Oklahoma City Thunder","games": 6, "round": "conference semifinals"}
+  ],
+  "Dallas Mavericks|Phoenix Suns": [
+    {"year": 2022, "winner": "Dallas Mavericks",  "loser": "Phoenix Suns",     "games": 7, "round": "conference semifinals"}
+  ],
+  "Dallas Mavericks|Utah Jazz": [
+    {"year": 2022, "winner": "Dallas Mavericks",  "loser": "Utah Jazz",        "games": 6, "round": "first round"}
+  ],
+  "Denver Nuggets|Golden State Warriors": [
+    {"year": 2022, "winner": "Golden State Warriors","loser": "Denver Nuggets", "games": 5, "round": "first round"}
+  ],
+  "Denver Nuggets|LA Clippers": [
+    {"year": 2020, "winner": "Denver Nuggets",    "loser": "LA Clippers",      "games": 7, "round": "conference semifinals"}
+  ],
+  "Denver Nuggets|Los Angeles Lakers": [
+    {"year": 2024, "winner": "Denver Nuggets",    "loser": "Los Angeles Lakers","games": 5, "round": "first round"},
+    {"year": 2023, "winner": "Los Angeles Lakers","loser": "Denver Nuggets",   "games": 6, "round": "conference semifinals"},
+    {"year": 2020, "winner": "Los Angeles Lakers","loser": "Denver Nuggets",   "games": 5, "round": "conference finals"}
+  ],
+  "Denver Nuggets|Miami Heat": [
+    {"year": 2023, "winner": "Denver Nuggets",    "loser": "Miami Heat",       "games": 5, "round": "finals"}
+  ],
+  "Denver Nuggets|Minnesota Timberwolves": [
+    {"year": 2023, "winner": "Denver Nuggets",    "loser": "Minnesota Timberwolves","games": 5, "round": "first round"},
+    {"year": 2024, "winner": "Minnesota Timberwolves","loser": "Denver Nuggets","games": 7, "round": "conference semifinals"}
+  ],
+  "Denver Nuggets|Phoenix Suns": [
+    {"year": 2023, "winner": "Denver Nuggets",    "loser": "Phoenix Suns",     "games": 6, "round": "conference semifinals"},
+    {"year": 2021, "winner": "Phoenix Suns",      "loser": "Denver Nuggets",   "games": 4, "round": "conference semifinals"}
+  ],
+  "Denver Nuggets|Portland Trail Blazers": [
+    {"year": 2021, "winner": "Denver Nuggets",    "loser": "Portland Trail Blazers","games": 6, "round": "first round"}
+  ],
+  "Denver Nuggets|San Antonio Spurs": [
+    {"year": 2019, "winner": "Denver Nuggets",    "loser": "San Antonio Spurs","games": 7, "round": "first round"}
+  ],
+  "Denver Nuggets|Utah Jazz": [
+    {"year": 2020, "winner": "Denver Nuggets",    "loser": "Utah Jazz",        "games": 7, "round": "first round"}
+  ],
+  "Detroit Pistons|Milwaukee Bucks": [
+    {"year": 2019, "winner": "Milwaukee Bucks",   "loser": "Detroit Pistons",  "games": 4, "round": "first round"}
+  ],
+  "Golden State Warriors|Houston Rockets": [
+    {"year": 2019, "winner": "Golden State Warriors","loser": "Houston Rockets","games": 6, "round": "conference semifinals"},
+    {"year": 2018, "winner": "Golden State Warriors","loser": "Houston Rockets","games": 7, "round": "conference finals"},
+    {"year": 2016, "winner": "Golden State Warriors","loser": "Houston Rockets","games": 5, "round": "first round"}
+  ],
+  "Golden State Warriors|LA Clippers": [
+    {"year": 2019, "winner": "Golden State Warriors","loser": "LA Clippers",   "games": 6, "round": "first round"}
+  ],
+  "Golden State Warriors|Los Angeles Lakers": [
+    {"year": 2023, "winner": "Los Angeles Lakers","loser": "Golden State Warriors","games": 6, "round": "conference semifinals"}
+  ],
+  "Golden State Warriors|Memphis Grizzlies": [
+    {"year": 2022, "winner": "Golden State Warriors","loser": "Memphis Grizzlies","games": 6, "round": "conference semifinals"}
+  ],
+  "Golden State Warriors|Oklahoma City Thunder": [
+    {"year": 2016, "winner": "Golden State Warriors","loser": "Oklahoma City Thunder","games": 7, "round": "conference finals"}
+  ],
+  "Golden State Warriors|Portland Trail Blazers": [
+    {"year": 2019, "winner": "Golden State Warriors","loser": "Portland Trail Blazers","games": 4, "round": "conference finals"}
+  ],
+  "Golden State Warriors|Sacramento Kings": [
+    {"year": 2023, "winner": "Golden State Warriors","loser": "Sacramento Kings","games": 7, "round": "first round"}
+  ],
+  "Golden State Warriors|San Antonio Spurs": [
+    {"year": 2018, "winner": "Golden State Warriors","loser": "San Antonio Spurs","games": 4, "round": "first round"},
+    {"year": 2017, "winner": "Golden State Warriors","loser": "San Antonio Spurs","games": 4, "round": "conference finals"}
+  ],
+  "Houston Rockets|Minnesota Timberwolves": [
+    {"year": 2018, "winner": "Houston Rockets",   "loser": "Minnesota Timberwolves","games": 5, "round": "first round"}
+  ],
+  "Houston Rockets|Oklahoma City Thunder": [
+    {"year": 2020, "winner": "Houston Rockets",   "loser": "Oklahoma City Thunder","games": 7, "round": "first round"}
+  ],
+  "Houston Rockets|Utah Jazz": [
+    {"year": 2019, "winner": "Houston Rockets",   "loser": "Utah Jazz",        "games": 5, "round": "first round"},
+    {"year": 2018, "winner": "Houston Rockets",   "loser": "Utah Jazz",        "games": 5, "round": "conference semifinals"}
+  ],
+  "Indiana Pacers|Milwaukee Bucks": [
+    {"year": 2024, "winner": "Indiana Pacers",    "loser": "Milwaukee Bucks",  "games": 6, "round": "first round"}
+  ],
+  "Indiana Pacers|Miami Heat": [
+    {"year": 2020, "winner": "Miami Heat",        "loser": "Indiana Pacers",   "games": 4, "round": "first round"}
+  ],
+  "Indiana Pacers|New York Knicks": [
+    {"year": 2024, "winner": "Indiana Pacers",    "loser": "New York Knicks",  "games": 7, "round": "conference semifinals"}
+  ],
+  "LA Clippers|Phoenix Suns": [
+    {"year": 2021, "winner": "Phoenix Suns",      "loser": "LA Clippers",      "games": 6, "round": "conference finals"}
+  ],
+  "LA Clippers|Utah Jazz": [
+    {"year": 2021, "winner": "LA Clippers",       "loser": "Utah Jazz",        "games": 6, "round": "conference semifinals"}
+  ],
+  "Los Angeles Lakers|Memphis Grizzlies": [
+    {"year": 2023, "winner": "Los Angeles Lakers","loser": "Memphis Grizzlies","games": 6, "round": "first round"}
+  ],
+  "Los Angeles Lakers|Miami Heat": [
+    {"year": 2020, "winner": "Los Angeles Lakers","loser": "Miami Heat",       "games": 6, "round": "finals"}
+  ],
+  "Los Angeles Lakers|Houston Rockets": [
+    {"year": 2020, "winner": "Los Angeles Lakers","loser": "Houston Rockets",  "games": 5, "round": "conference semifinals"}
+  ],
+  "Los Angeles Lakers|Portland Trail Blazers": [
+    {"year": 2020, "winner": "Los Angeles Lakers","loser": "Portland Trail Blazers","games": 5, "round": "first round"}
+  ],
+  "Memphis Grizzlies|Minnesota Timberwolves": [
+    {"year": 2022, "winner": "Memphis Grizzlies", "loser": "Minnesota Timberwolves","games": 6, "round": "first round"}
+  ],
+  "Memphis Grizzlies|San Antonio Spurs": [
+    {"year": 2022, "winner": "Memphis Grizzlies", "loser": "San Antonio Spurs","games": 6, "round": "first round"}
+  ],
+  "Memphis Grizzlies|Utah Jazz": [
+    {"year": 2021, "winner": "Utah Jazz",         "loser": "Memphis Grizzlies","games": 5, "round": "first round"}
+  ],
+  "Miami Heat|Milwaukee Bucks": [
+    {"year": 2021, "winner": "Milwaukee Bucks",   "loser": "Miami Heat",       "games": 4, "round": "first round"},
+    {"year": 2020, "winner": "Miami Heat",        "loser": "Milwaukee Bucks",  "games": 5, "round": "conference semifinals"},
+    {"year": 2023, "winner": "Miami Heat",        "loser": "Milwaukee Bucks",  "games": 5, "round": "first round"}
+  ],
+  "Miami Heat|New York Knicks": [
+    {"year": 2023, "winner": "Miami Heat",        "loser": "New York Knicks",  "games": 6, "round": "conference semifinals"},
+    {"year": 2016, "winner": "Miami Heat",        "loser": "Toronto Raptors",  "games": 7, "round": "conference semifinals"}
+  ],
+  "Miami Heat|Philadelphia 76ers": [
+    {"year": 2018, "winner": "Philadelphia 76ers","loser": "Miami Heat",       "games": 5, "round": "first round"},
+    {"year": 2022, "winner": "Miami Heat",        "loser": "Philadelphia 76ers","games": 6, "round": "conference semifinals"}
+  ],
+  "Miami Heat|Toronto Raptors": [
+    {"year": 2016, "winner": "Miami Heat",        "loser": "Toronto Raptors",  "games": 7, "round": "conference semifinals"}
+  ],
+  "Milwaukee Bucks|Orlando Magic": [
+    {"year": 2020, "winner": "Milwaukee Bucks",   "loser": "Orlando Magic",    "games": 5, "round": "first round"},
+    {"year": 2019, "winner": "Milwaukee Bucks",   "loser": "Orlando Magic",    "games": 5, "round": "first round"}
+  ],
+  "Milwaukee Bucks|Phoenix Suns": [
+    {"year": 2021, "winner": "Milwaukee Bucks",   "loser": "Phoenix Suns",     "games": 6, "round": "finals"}
+  ],
+  "Minnesota Timberwolves|Oklahoma City Thunder": [
+    {"year": 2024, "winner": "Minnesota Timberwolves","loser": "Oklahoma City Thunder","games": 6, "round": "conference semifinals"}
+  ],
+  "Minnesota Timberwolves|Phoenix Suns": [
+    {"year": 2024, "winner": "Minnesota Timberwolves","loser": "Phoenix Suns", "games": 4, "round": "first round"}
+  ],
+  "New Orleans Pelicans|Oklahoma City Thunder": [
+    {"year": 2024, "winner": "Oklahoma City Thunder","loser": "New Orleans Pelicans","games": 4, "round": "first round"}
+  ],
+  "New Orleans Pelicans|Phoenix Suns": [
+    {"year": 2022, "winner": "Phoenix Suns",      "loser": "New Orleans Pelicans","games": 6, "round": "first round"}
+  ],
+  "New Orleans Pelicans|Portland Trail Blazers": [
+    {"year": 2018, "winner": "New Orleans Pelicans","loser": "Portland Trail Blazers","games": 4, "round": "first round"}
+  ],
+  "New York Knicks|Philadelphia 76ers": [
+    {"year": 2024, "winner": "New York Knicks",   "loser": "Philadelphia 76ers","games": 6, "round": "first round"}
+  ],
+  "Oklahoma City Thunder|San Antonio Spurs": [
+    {"year": 2016, "winner": "Oklahoma City Thunder","loser": "San Antonio Spurs","games": 6, "round": "conference semifinals"}
+  ],
+  "Oklahoma City Thunder|Utah Jazz": [
+    {"year": 2018, "winner": "Utah Jazz",         "loser": "Oklahoma City Thunder","games": 6, "round": "first round"}
+  ],
+  "Orlando Magic|Toronto Raptors": [
+    {"year": 2019, "winner": "Toronto Raptors",   "loser": "Orlando Magic",    "games": 5, "round": "first round"}
+  ],
+  "Philadelphia 76ers|Toronto Raptors": [
+    {"year": 2022, "winner": "Philadelphia 76ers","loser": "Toronto Raptors",  "games": 6, "round": "first round"}
+  ],
+  "Philadelphia 76ers|Washington Wizards": [
+    {"year": 2021, "winner": "Philadelphia 76ers","loser": "Washington Wizards","games": 5, "round": "first round"}
+  ],
+  "Portland Trail Blazers|Oklahoma City Thunder": [
+    {"year": 2019, "winner": "Portland Trail Blazers","loser": "Oklahoma City Thunder","games": 5, "round": "first round"}
+  ],
+  "Portland Trail Blazers|Denver Nuggets": [
+    {"year": 2019, "winner": "Portland Trail Blazers","loser": "Denver Nuggets","games": 7, "round": "conference semifinals"}
+  ],
+  "Toronto Raptors|Golden State Warriors": [
+    {"year": 2019, "winner": "Toronto Raptors",   "loser": "Golden State Warriors","games": 6, "round": "finals"}
+  ],
+  "Toronto Raptors|Milwaukee Bucks": [
+    {"year": 2019, "winner": "Toronto Raptors",   "loser": "Milwaukee Bucks",  "games": 6, "round": "conference finals"},
+    {"year": 2017, "winner": "Milwaukee Bucks",   "loser": "Toronto Raptors",  "games": 6, "round": "first round"}
+  ],
+  "Toronto Raptors|Philadelphia 76ers": [
+    {"year": 2019, "winner": "Toronto Raptors",   "loser": "Philadelphia 76ers","games": 7, "round": "conference semifinals"}
+  ],
+  "Washington Wizards|Toronto Raptors": [
+    {"year": 2018, "winner": "Toronto Raptors",   "loser": "Washington Wizards","games": 6, "round": "first round"}
+  ]
+}

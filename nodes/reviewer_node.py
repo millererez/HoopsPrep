@@ -66,9 +66,9 @@ def reviewer_node(state: GraphState) -> dict:
   Format: ISSUE 3: "[exact wrong sentence]" → Replace with: "[rewrite the sentence so it
   includes the games-back number from STAKES CONTEXT]"
   The replacement must be pure broadcast prose."""
-    else:
-        # Play-in / playoffs: seed positions are locked — no games-back numbers exist or belong.
-        check2 = """CHECK 2 — POSITION LABELS (PLAY-IN / PLAYOFFS):
+    elif season_phase == "playin":
+        # Play-in: seed positions locked, no games-back numbers.
+        check2 = """CHECK 2 — POSITION LABELS (PLAY-IN):
   PASS if: paragraph 1 opener contains only records and seeds with NO positional gap comparison.
   A correct opener looks like: "The Charlotte Hornets (44-38, #9 East) host the Miami Heat (43-39, #10 East)."
   ISSUE if: the opener adds any positional comparison — "games back", "games ahead", "behind the #",
@@ -78,7 +78,20 @@ def reviewer_node(state: GraphState) -> dict:
   Do NOT add any positional gap to the replacement."""
 
         check3 = """CHECK 3 — STAKES NUMBERS:
-  SKIP — play-in and playoff games use outcome framing (who advances, who is eliminated),
+  SKIP — play-in games use outcome framing (who advances, who is eliminated),
+  not games-back numbers. Do NOT flag the absence of games-back language. Output nothing for this check."""
+
+    else:
+        # Playoffs: opener must include game number and series score — no games-back language.
+        check2 = """CHECK 2 — POSITION LABELS (PLAYOFFS):
+  PASS if: paragraph 1 opener contains records, seeds, and game number. If it is Game 2 or later, it must also contain the series score. NO games-back comparison is allowed.
+  A correct Game 1 opener looks like: "The Cleveland Cavaliers (64-18, #1 East) host the Orlando Magic (41-41, #8 East) in Game 1 of the first round."
+  ISSUE if: the opener adds any regular-season positional comparison ("games back", "ahead of", etc.) or invents a series score for Game 1 (like "tied 0-0").
+  Format: ISSUE 2: "[wrong sentence]" → Replace with: "[corrected opener]"
+  CRITICAL: If the opener is correct, output EXACTLY AND ONLY "PASS". Do NOT output "No issue found, but...". Do NOT ask to add "0-0" to Game 1."""
+
+        check3 = """CHECK 3 — STAKES NUMBERS:
+  SKIP — playoff games use series-score framing (who leads the series, game number),
   not games-back numbers. Do NOT flag the absence of games-back language. Output nothing for this check."""
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -147,8 +160,9 @@ CHECK 4 — ATTRIBUTION:
   which paragraph (e.g., "In the Portland Trail Blazers paragraph, ...").
 
 CHECK 5 — H2H IN NARRATIVE:
-  PASS if: no paragraph references a prior meeting or previous game result between the teams.
-  ISSUE if: any sentence mentions the previous meeting score or outcome. Quote it.
+  PASS if: no paragraph references a regular-season prior meeting or regular-season game result.
+  NOTE: Historical playoff meetings in paragraph 1 (e.g., "all-time playoff series", "last met in 2024", "first playoff meeting") are REQUIRED and ALLOWED. Do NOT flag playoff history.
+  ISSUE if: any sentence mentions a specific regular-season game result. Quote it.
 
 CHECK 6 — BANNED PHRASES:
   These phrases are forbidden: {banned_str}
@@ -186,8 +200,12 @@ If no issues found, output exactly: APPROVED
 No other text. No PASS lines. Only issues or APPROVED."""
 
     print("[Reviewer]  Running checklist ...")
-    response = _get_llm().invoke([HumanMessage(content=prompt)])
-    llm_output = response.content.strip()
+    try:
+        response = _get_llm().invoke([HumanMessage(content=prompt)])
+        llm_output = response.content.strip()
+    except Exception as e:
+        print(f"[Reviewer] ❌ LLM API Error (Quota/Timeout): {e}")
+        return {"review_issues": ""}
 
     # Python-guard: drop ISSUE 8 lines that name a player not in out_players_summary.
     # The reviewer LLM sometimes hallucinates OUT status from training knowledge.

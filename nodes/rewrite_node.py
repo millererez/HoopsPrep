@@ -97,8 +97,13 @@ Return the complete corrected 3-paragraph text.
 No commentary, no explanations. Just the 4 paragraphs."""
 
     print(f"[Rewriter]  Fixing {review_issues.count('ISSUE')} issue(s) ...")
-    response = _get_llm().invoke([HumanMessage(content=prompt)])
-    rewritten = response.content.strip()
+    try:
+        response = _get_llm().invoke([HumanMessage(content=prompt)])
+        rewritten = response.content.strip()
+    except Exception as e:
+        print(f"[Rewriter] ❌ LLM API Error (Quota/Timeout): {e}")
+        # אם השכתוב נכשל, מחזירים את הטקסט המקורי כמו שהוא
+        return {"narrative_section": narrative, "review_issues": ""}
 
     violations = find_violations(rewritten)
     if violations:

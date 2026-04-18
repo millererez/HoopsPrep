@@ -378,6 +378,93 @@ def _build_playin_para1_sentences(
     return s1, s2
 
 
+def _team_city(full_name: str) -> str:
+    """Extract city/state from team full name (removes last word = nickname)."""
+    parts = full_name.split()
+    return " ".join(parts[:-1]) if len(parts) > 1 else full_name
+
+
+def _build_playoff_para1_sentences(
+    home_full: str, home_record_seed: str,
+    away_full: str, away_record_seed: str,
+    stakes_context: str,
+) -> tuple[str, str, str]:
+    """
+    Build the first 1-3 sentences of playoff paragraph 1 entirely in Python.
+    Returns (s1, s2, s3) where s2/s3 may be empty strings.
+    """
+    # Parse fields from stakes_context
+    def _field(label: str) -> str:
+        m = _re.search(rf"^{label}:\s*(.+)$", stakes_context, _re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    game_number_str  = _field("Game")
+    series_str       = _field("Series")
+    elimination      = _field("Elimination game").upper() == "YES"
+    home_court_line  = _field(r"Home court Game \d+")
+    history_sentence = _field("Playoff history")
+    round_label      = _field("Round")
+
+    try:
+        game_number = int(game_number_str)
+    except ValueError:
+        game_number = 1
+
+    # S1 — always present
+    # Convert series_str from "X leads 2-0" → "X leading 2-0" for natural sentence flow
+    series_clause = _re.sub(r"\b(leads|lead)\b", "leading", series_str).strip()
+
+    if game_number == 1:
+        s1 = (
+            f"The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed}) "
+            f"in Game 1 of the {round_label}."
+        )
+    else:
+        s1 = (
+            f"The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed}) "
+            f"in Game {game_number} of the {round_label}, with {series_clause}."
+        )
+
+    # S2 — home court / elimination; only for games 2, 4, 5, 6, 7 (not 1 or 3)
+    s2 = ""
+    if game_number in {2, 4, 5, 6, 7}:
+        hc_m = _re.search(r"Home court Game (\d+): (.+)", stakes_context)
+        if hc_m:
+            next_game_num = hc_m.group(1)
+            next_host     = hc_m.group(2).strip()
+            next_visitor  = away_full if next_host == home_full else home_full
+            if elimination:
+                leader_m = _re.search(r"Series: (.+?) leading", stakes_context)
+                if leader_m:
+                    leader_name = leader_m.group(1).strip()
+                    trailer = away_full if leader_name == home_full else home_full
+                else:
+                    trailer = ""
+                next_city = _team_city(next_host)
+                if trailer:
+                    s2 = (
+                        f"{trailer} faces elimination tonight; a loss ends their season, "
+                        f"while a win forces Game {next_game_num} in {next_city}."
+                    )
+                else:
+                    s2 = (
+                        f"The trailing team faces elimination tonight; "
+                        f"a win forces Game {next_game_num} in {next_city}."
+                    )
+            else:
+                next_city = _team_city(next_host)
+                s2 = f"Game {next_game_num} shifts to {next_city} regardless of tonight's result."
+
+    # S3 — playoff history
+    s3 = ""
+    if history_sentence and "No meetings" not in history_sentence:
+        s3 = history_sentence
+    else:
+        s3 = f"This marks the first playoff meeting between the {home_full} and the {away_full} in over a decade."
+
+    return s1, s2, s3
+
+
 def _retrieve(team_name: str, today: str) -> str:
     try:
         results = get_collection().query(
@@ -495,20 +582,29 @@ Rules for all 3 sentences:
 - This is the only paragraph that may reference both teams together."""
 
     elif season_phase == "playoffs":
+        po_s1, po_s2, po_s3 = _build_playoff_para1_sentences(
+            home_full, home_record_seed, away_full, away_record_seed, stakes_context
+        )
+        print(f"[NarrativeComposer] Playoff para1 S1: {po_s1}")
+        print(f"[NarrativeComposer] Playoff para1 S2: {po_s2 or '(none)'}")
+        print(f"[NarrativeComposer] Playoff para1 S3: {po_s3 or '(none)'}")
+
+        # Determine sentence count and present each verbatim line to the LLM
+        po_sentences = [s for s in [po_s1, po_s2, po_s3] if s]
+        po_count = len(po_sentences)
+        po_numbered = "\n".join(f"  Sentence {i+1}: \"{s}\"" for i, s in enumerate(po_sentences))
+
         para1_instructions = f"""PARAGRAPH 1 — CONTEXT AND STAKES (PLAYOFF GAME):
-Write exactly 3 sentences, in this order — no more, no fewer:
-  Sentence 1 (opener): Use this exact format —
-    "The {home_full} ({home_record_seed}) host the {away_full} ({away_record_seed})."
-    Nothing else in this sentence. No stakes here — records and seeds only.
-  Sentence 2 (playoff stakes): One sentence framing the playoff matchup using STAKES CONTEXT.
-    Do NOT write "games remaining." Do NOT use regular-season stakes language.
-  Sentence 3 (game frame): one sentence using GAME CONTEXT SIGNALS.
+Write exactly {po_count} sentence{'s' if po_count != 1 else ''}, copied VERBATIM from the lines below.
+Do NOT rephrase, reorder, or add any sentence. Do NOT add games-back language.
+These sentences were computed by Python from live data and are authoritative.
+
+{po_numbered}
 
 Rules:
-- STREAK: {home_full} — {home_streak} | {away_full} — {away_streak}
-- All records must match STANDINGS exactly.
-- Do NOT write "games remaining" anywhere.
-- This is the only paragraph that may reference both teams together."""
+- Copy every sentence exactly as written — do not change a single word.
+- This is the only paragraph that may reference both teams together.
+- Do NOT write "games remaining" anywhere."""
 
     else:  # regular season — original instructions, unchanged for future seasons
         para1_instructions = f"""PARAGRAPH 1 — CONTEXT AND STAKES:
@@ -556,6 +652,11 @@ BEFORE WRITING — memorize the banned phrase list. Any banned phrase means your
 
 ─── STAKES CONTEXT (pre-computed from full conference standings) ───
 {stakes_context if stakes_context else "Stakes data unavailable."}
+{"" if season_phase != "playoffs" else f"""
+─── SERIES CONTEXT (use for paras 2/3 game references) ───
+{h2h_summary if h2h_summary and h2h_summary.strip() not in ("No completed H2H games found this season.", "") else "Game 1 — no series games played yet. Reference regular-season form for paras 2/3."}
+NOTE: In paras 2/3, reference individual game scores as 'in Game 1', 'in Game 2', etc. — NOT 'against the [TeamName]'.
+""".strip()}
 
 ─── GAME CONTEXT SIGNALS (pre-computed from ESPN data) ───
 {signals}
@@ -666,8 +767,14 @@ ABSOLUTE RULES:
 Write ONLY the 3 paragraphs."""
 
     print(f"[NarrativeComposer] Generating narrative ...")
-    response = _get_llm().invoke([HumanMessage(content=prompt)])
-    narrative = response.content.strip()
+    
+    try:
+        response = _get_llm().invoke([HumanMessage(content=prompt)])
+        narrative = response.content.strip()
+    except Exception as e:
+        # תופס את השגיאה מ-OpenAI ומדפיס אותה בצורה ברורה
+        print(f"[NarrativeComposer] ❌ LLM API Error: {e}")
+        return {"narrative_section": "Report generation failed due to an AI server error (e.g., timeout or rate limit). Please try again in a minute."}
 
     violations = _find_violations(narrative)
     if violations:

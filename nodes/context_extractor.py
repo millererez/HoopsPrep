@@ -103,23 +103,34 @@ def context_extractor_node(state: GraphState) -> dict:
         home_full = teams[0][0] if teams else "Team 1"
         away_full = "Team 2"
 
-    tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    try:
+        tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    except Exception as e:
+        print(f"[ContextExtractor] ❌ Failed to initialize Tavily client: {e}")
+        return {"team_narrative_bullets": "[RAG: 0 chunks ingested due to missing API key]"}
+
     total_chunks = 0
 
     for team_name in [home_full, away_full]:
         print(f"[ContextExtractor]  Searching: {team_name} ...")
 
-        # Focused query: recent performance and season context — avoids generic award/ladder articles
+        # Focused query: recent performance and season context
         q1 = f'"{team_name}" NBA 2026 recent games season players performance standings'
-        r1 = tavily.search(query=q1, max_results=3,
-                           include_domains=["espn.com", "nba.com", "theathletic.com",
-                                            "cbssports.com", "bleacherreport.com", "si.com"],
-                           days=45, include_raw_content=True)
+        
+        try:
+            r1 = tavily.search(query=q1, max_results=3,
+                               include_domains=["espn.com", "nba.com", "theathletic.com",
+                                                "cbssports.com", "bleacherreport.com", "si.com"],
+                               days=45, include_raw_content=True)
+        except Exception as e:
+            print(f"[ContextExtractor] ❌ Tavily API Error (main search): {e}")
+            r1 = {}
 
         seen: set[str] = set()
         combined = ""
         team_lower  = team_name.lower()
-        short_name  = team_name.split()[-1].lower()   # e.g. "Celtics" from "Boston Celtics"
+        short_name  = team_name.split()[-1].lower()
+        
         for result in r1.get("results", []):
             url = result.get("url", "")
             if url in seen:
@@ -129,7 +140,6 @@ def context_extractor_node(state: GraphState) -> dict:
             raw = result.get("raw_content") or result.get("content", "")
             content = raw[:8000] if raw else ""
 
-            # Relevance gate: discard articles that barely mention the team
             mentions = content.lower().count(team_lower) + content.lower().count(short_name)
             if mentions < 3:
                 print(f"  → SKIPPED ({mentions} mentions): {title[:70]}")
@@ -140,16 +150,20 @@ def context_extractor_node(state: GraphState) -> dict:
 
         if combined.strip():
             combined = _clean(combined)
-            # Quality gate — if content is thin (<1500 chars), retry with a broader query
             if len(combined) < 1500:
                 print(f"[ContextExtractor]  Thin content for {team_name} ({len(combined)} chars) — retrying ...")
                 q_fallback = f"{team_name} NBA 2026 season players games"
-                r_fallback = tavily.search(
-                    query=q_fallback, max_results=3,
-                    include_domains=["espn.com", "nba.com", "cbssports.com",
-                                     "bleacherreport.com", "si.com", "theathletic.com"],
-                    days=45, include_raw_content=True,
-                )
+                try:
+                    r_fallback = tavily.search(
+                        query=q_fallback, max_results=3,
+                        include_domains=["espn.com", "nba.com", "cbssports.com",
+                                         "bleacherreport.com", "si.com", "theathletic.com"],
+                        days=45, include_raw_content=True,
+                    )
+                except Exception as e:
+                    print(f"[ContextExtractor] ❌ Tavily API Error (fallback search): {e}")
+                    r_fallback = {}
+                    
                 for result in r_fallback.get("results", []):
                     url = result.get("url", "")
                     if url in seen:
@@ -166,9 +180,13 @@ def context_extractor_node(state: GraphState) -> dict:
                     print(f"  → [fallback] {title[:80]} ({len(content)} chars, {mentions} mentions)")
                 combined = _clean(combined)
 
-            n = _upsert(team_name, combined.strip(), today)
-            total_chunks += n
-            print(f"[ContextExtractor]  Upserted {n} chunks for {team_name}")
+            try:
+                # Catching OpenAI quota errors during embedding creation
+                n = _upsert(team_name, combined.strip(), today)
+                total_chunks += n
+                print(f"[ContextExtractor]  Upserted {n} chunks for {team_name}")
+            except Exception as e:
+                print(f"[ContextExtractor] ❌ Upsert/Embedding Error (Check OpenAI Quota): {e}")
         else:
             print(f"[ContextExtractor]  No Tavily content for {team_name}")
 

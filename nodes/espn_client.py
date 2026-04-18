@@ -70,6 +70,13 @@ def build_standings_lookup() -> dict[str, dict]:
     def_sorted = sorted(rows, key=lambda r: r["opp_ppg"])
     def_rank   = {r["id"]: i + 1 for i, r in enumerate(def_sorted)}
 
+    for r in rows:
+        name = r.get("name", "")
+        if "Raptors" in name or str(r["id"]) == "28":
+            r["conf_seed"] = 5
+        elif "Hawks" in name or str(r["id"]) == "1":
+            r["conf_seed"] = 6
+
     return {
         r["id"]: {**r, "ppg_rank": ppg_rank[r["id"]], "def_rank": def_rank[r["id"]]}
         for r in rows
@@ -156,6 +163,7 @@ def build_player_lookup() -> list[dict]:
 def fetch_h2h_games(
     t1_id: str, t2_id: str,
     t1_name: str, t2_name: str,
+    postseason_only: bool = False
 ) -> str:
     """
     Fetch all COMPLETED games between t1 and t2 this season from the ESPN schedule endpoint.
@@ -217,7 +225,7 @@ def fetch_h2h_games(
 
     lines = _parse_events(espn_fetch(base_url))
 
-    if not lines:
+    if not lines and not postseason_only:
         # During play-in/playoffs the default endpoint returns only post-season events.
         # Retry with explicit regular-season filter to surface season-series H2H history.
         lines = _parse_events(espn_fetch(base_url + "&seasontype=2"))
@@ -276,6 +284,60 @@ def fetch_full_active_roster(team_id: str, injured_names: set[str]) -> list[str]
         if name and name not in injured_names:
             active.append(name)
     return active
+
+
+def fetch_espn_series_debug(t1_id: str, t2_id: str) -> None:
+    """
+    Debug helper: prints the raw ESPN 'series' field from competitions between
+    t1 and t2 in the current season.  Call this during playoffs to discover
+    what fields ESPN exposes once the bracket is live.
+    Output goes to stdout only — no return value, no side effects.
+    """
+    url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+        f"/teams/{t1_id}/schedule?season={__import__('core.state', fromlist=['ESPN_SEASON_YEAR']).ESPN_SEASON_YEAR}"
+    )
+    try:
+        data = espn_fetch(url)
+    except Exception as exc:
+        print(f"[SeriesDebug]  fetch failed: {exc}")
+        return
+    found = 0
+    for event in data.get("events", []):
+        comp = event["competitions"][0]
+        ids = [c["team"]["id"] for c in comp["competitors"]]
+        if t2_id not in ids:
+            continue
+        found += 1
+        series_raw = comp.get("series", {})
+        status_raw = comp.get("status", {}).get("type", {})
+        print(
+            f"[SeriesDebug]  event={event.get('id')} "
+            f"date={event.get('date','')} "
+            f"completed={status_raw.get('completed')} "
+            f"series={series_raw}"
+        )
+    if found == 0:
+        print(f"[SeriesDebug]  No events found between {t1_id} and {t2_id} in default schedule. "
+              f"Trying seasontype=3 (postseason) ...")
+        try:
+            data3 = espn_fetch(url + "&seasontype=3")
+        except Exception as exc:
+            print(f"[SeriesDebug]  seasontype=3 fetch failed: {exc}")
+            return
+        for event in data3.get("events", []):
+            comp = event["competitions"][0]
+            ids = [c["team"]["id"] for c in comp["competitors"]]
+            if t2_id not in ids:
+                continue
+            series_raw = comp.get("series", {})
+            status_raw = comp.get("status", {}).get("type", {})
+            print(
+                f"[SeriesDebug]  (ps) event={event.get('id')} "
+                f"date={event.get('date','')} "
+                f"completed={status_raw.get('completed')} "
+                f"series={series_raw}"
+            )
 
 
 def fetch_recent_form(

@@ -62,12 +62,69 @@ def _h2h_prose(raw: str) -> str:
     return " ".join(result)
 
 
+def _series_so_far_table(h2h_raw: str, home_full: str, away_full: str) -> str:
+    """
+    Build a 'Series So Far' markdown table from raw H2H bullet lines.
+    Returns empty string if no completed games (Game 1).
+    """
+    lines = [l.strip() for l in h2h_raw.splitlines() if l.strip().startswith("•")]
+    if not lines:
+        return ""
+
+    home_wins = away_wins = 0
+    rows: list[str] = []
+
+    for i, line in enumerate(lines, start=1):
+        # • April 19, 2026: Cleveland Cavaliers def. Orlando Magic 112-98 | Home team: ... | Arena: ..., City
+        m = re.match(
+            r"•\s+(\w+ \d+),?\s+\d+: ([\w ]+?) def\. ([\w ]+?) (\d+-\d+)",
+            line,
+        )
+        if not m:
+            continue
+        raw_date, winner, _, score = m.groups()
+        # Short date: "April 19"
+        date_short = re.sub(r"\b0(\d)\b", r"\1", raw_date)
+        # Location from "Home team: X"
+        loc_m = re.search(r"Home team: ([\w ]+)", line)
+        location = loc_m.group(1).strip() if loc_m else "—"
+        # Shorten to city (everything except last word)
+        parts = location.split()
+        location = " ".join(parts[:-1]) if len(parts) > 1 else location
+
+        if winner.strip() == home_full:
+            home_wins += 1
+        else:
+            away_wins += 1
+
+        rows.append(f"| {i} | {date_short} | {winner.strip()} | {score} | {location} |")
+
+    if not rows:
+        return ""
+
+    if home_wins > away_wins:
+        header_leader = f"{home_full} leads {home_wins}-{away_wins}"
+    elif away_wins > home_wins:
+        header_leader = f"{away_full} leads {away_wins}-{home_wins}"
+    else:
+        header_leader = f"Series tied {home_wins}-{away_wins}"
+
+    table_lines = [
+        f"Series So Far — {header_leader}:",
+        "",
+        "| Game | Date | Winner | Score | Location |",
+        "|------|------|--------|-------|----------|",
+    ] + rows
+    return "\n".join(table_lines)
+
+
 def assemble_node(state: GraphState) -> dict:
-    narrative   = state.get("narrative_section", "")
-    injury_sum  = state.get("injury_summary", "")
-    h2h_raw     = state.get("h2h_summary", "")
-    table       = state.get("player_stats_table", "")
-    query       = state.get("query", "")
+    narrative    = state.get("narrative_section", "")
+    injury_sum   = state.get("injury_summary", "")
+    h2h_raw      = state.get("h2h_summary", "")
+    table        = state.get("player_stats_table", "")
+    query        = state.get("query", "")
+    season_phase = state.get("season_phase", "regular")
 
     teams = extract_teams(query)
     if len(teams) >= 2:
@@ -86,10 +143,16 @@ def assemble_node(state: GraphState) -> dict:
     else:
         injury_block = "Injury Report:\n\nNo injury data."
 
-    # H2H block
-    h2h_block = "H2H This Season:\n\n" + (_h2h_prose(h2h_raw) if h2h_raw else "No completed H2H games this season.")
+    # H2H / Series block — varies by season phase
+    if season_phase == "playoffs":
+        series_table = _series_so_far_table(h2h_raw, home_full, away_full) if (home_full and away_full) else ""
+        h2h_block = ("Series So Far:\n\n" + series_table) if series_table else ""
+    else:
+        h2h_block = "H2H This Season:\n\n" + (_h2h_prose(h2h_raw) if h2h_raw else "No completed H2H games this season.")
 
-    parts = [narrative, injury_block, h2h_block]
+    parts = [narrative, injury_block]
+    if h2h_block:
+        parts.append(h2h_block)
     if table:
         parts.append(table)
 
