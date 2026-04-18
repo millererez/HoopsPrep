@@ -252,6 +252,11 @@ options = {
 def lock_generate_button():
     st.session_state.is_generating = True
 
+st.markdown("""
+<div style="text-align: center; margin-bottom: 1.2rem; color: #cbd5e1; font-size: 1.05rem; font-weight: 500;">
+  Pick a game to get your pre-game briefing 
+</div>
+""", unsafe_allow_html=True)
 with st.form("generate_form"):
     selected_label = st.selectbox("Tonight's Games", list(options.keys()))
     st.markdown("<div style='height: 0.4rem'></div>", unsafe_allow_html=True)
