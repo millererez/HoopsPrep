@@ -763,6 +763,7 @@ ABSOLUTE RULES:
 8. Zero citations, zero URLs. Pure prose.
 9. PARAGRAPH OWNERSHIP: paragraph 2 = {home_full} only, paragraph 3 = {away_full} only. No cross-team player mentions in these paragraphs.
 10. BANNED PHRASES: reread your output before finalizing. Any sentence with a banned phrase must be rewritten.
+11. NO RAW SOURCE TEXT: do not copy, paste, or quote any headline, article title, link text, or retrieved document fragment into your output. The background context is for your understanding only — it must never appear verbatim in the paragraphs.
 
 Write ONLY the 3 paragraphs."""
 
