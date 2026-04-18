@@ -1,31 +1,35 @@
 #!/bin/bash
 
 # ── Auto-clear today's cache on new deployment ───────────────────────────────
-# Render sets RENDER_GIT_COMMIT on every deploy. Compare against the last
-# seen commit stored on the persistent disk. If different → new deploy →
-# delete only today's rows (yesterday's are never served; the file stays).
 VERSION_FILE="/data/.last_deploy_commit"
 CURRENT_COMMIT="${RENDER_GIT_COMMIT:-unknown}"
 
-if [ -f "$VERSION_FILE" ] && [ "$(cat "$VERSION_FILE")" = "$CURRENT_COMMIT" ]; then
-    echo "Same deployment ($CURRENT_COMMIT) — keeping cache"
+echo "[Boot] Checking deployment version..."
+echo "[Boot] Current commit: $CURRENT_COMMIT"
+
+if [ -f "$VERSION_FILE" ]; then
+    LAST_COMMIT=$(cat "$VERSION_FILE")
+    echo "[Boot] Last seen commit: $LAST_COMMIT"
 else
-    echo "New deployment detected ($CURRENT_COMMIT) — clearing today's cache entries"
-    python3 - <<'EOF'
-import sqlite3, os
-db = os.environ.get("CACHE_DB_PATH", "/data/cache.db")
-if os.path.exists(db):
-    try:
-        conn = sqlite3.connect(db)
-        deleted = conn.execute("DELETE FROM report_cache").rowcount
-        conn.commit()
-        conn.close()
-        print(f"  Cleared {deleted} cached report(s) completely due to new deployment")
-    except sqlite3.Error as e:
-        print(f"  Database error: {e}")
-else:
-    print("  No cache file yet — nothing to clear")
-EOF
+    LAST_COMMIT="none"
+    echo "[Boot] No previous commit found on disk."
+fi
+
+# Force clear if commits don't match OR if the commit is unknown
+if [ "$LAST_COMMIT" = "$CURRENT_COMMIT" ] && [ "$CURRENT_COMMIT" != "unknown" ]; then
+    echo "[Boot] Same deployment detected ($CURRENT_COMMIT) — keeping cache."
+else
+    echo "[Boot] New deployment detected — clearing cache!"
+    
+    DB_PATH=${CACHE_DB_PATH:-"/data/cache.db"}
+    
+    if [ -f "$DB_PATH" ]; then
+        sqlite3 "$DB_PATH" "DELETE FROM report_cache;"
+        echo "[Boot] Cache cleared successfully via sqlite3."
+    else
+        echo "[Boot] Database file not found at $DB_PATH — nothing to clear yet."
+    fi
+    
     echo "$CURRENT_COMMIT" > "$VERSION_FILE"
 fi
 # ─────────────────────────────────────────────────────────────────────────────

@@ -390,7 +390,7 @@ if "report_data" in st.session_state:
   📈&nbsp; Player Stats
 </div>
 <div style="font-size: 0.95rem; color: #94a3b8; font-weight: 500; margin-bottom: 0.8rem;">
-  Season Averages — 2025-26
+  Season Averages - 2025-26
 </div>
 <hr style="border-color: #10B981; border-width: 1px; margin: 0 0 0.8rem 0;">
 """, unsafe_allow_html=True)
