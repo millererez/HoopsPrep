@@ -110,10 +110,10 @@ def _active_roster(table: str, team_name: str) -> list[str]:
         return []
     names = []
     for line in m.group(0).splitlines():
-        if line.startswith("| ") and not line.startswith("| Player") and "---" not in line:
+        if line.startswith("| ") and not line.startswith("| #") and "---" not in line:
             parts = [p.strip() for p in line.split("|")]
-            name = parts[1] if len(parts) > 1 else ""
-            if name and name not in ("Stats unavailable", "—", ""):
+            name = parts[2] if len(parts) > 2 else ""
+            if name and name not in ("Stats unavailable", "—", "", "Name"):
                 names.append(name)
     return names
 
@@ -150,11 +150,11 @@ def _game_signals(home_full: str, away_full: str, table: str, h2h_summary: str, 
 
     ppg_lookup: dict[str, float] = {}
     for line in table.splitlines():
-        if line.startswith("| ") and not line.startswith("| Player") and "---" not in line:
+        if line.startswith("| ") and not line.startswith("| #") and "---" not in line:
             parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 4:
+            if len(parts) >= 8:
                 try:
-                    ppg_lookup[parts[1]] = float(parts[3])
+                    ppg_lookup[parts[2]] = float(parts[7])
                 except (ValueError, IndexError):
                     pass
 
@@ -202,15 +202,15 @@ def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
     player_ppg: list[tuple[str, float]] = []
     in_table = False
     for line in stats_section.splitlines():
-        if line.startswith("| Player"):
+        if line.startswith("| #"):
             in_table = True
             continue
         if in_table and line.startswith("| ") and "---" not in line:
             parts = [p.strip() for p in line.split("|")]
-            if len(parts) > 3:
-                name = parts[1]
+            if len(parts) > 7:
+                name = parts[2]
                 try:
-                    ppg = float(parts[3])
+                    ppg = float(parts[7])
                     player_ppg.append((name, ppg))
                 except ValueError:
                     pass
@@ -245,6 +245,31 @@ def _dtd_stars(stats_section: str, inj_summary: str, team: str) -> str:
 
 
 
+_MONTH_NUMS = {
+    'january': 1, 'february': 2, 'march': 3, 'april': 4,
+    'may': 5, 'june': 6, 'july': 7, 'august': 8,
+    'september': 9, 'october': 10, 'november': 11, 'december': 12,
+}
+
+
+def _sent_age_days(sent: str):
+    """Return days since a date found in the sentence, or None if no date."""
+    from datetime import datetime as _dt
+    m = _re.search(
+        r'(january|february|march|april|may|june|july|august|'
+        r'september|october|november|december)'
+        r'\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})',
+        sent, _re.IGNORECASE,
+    )
+    if not m:
+        return None
+    try:
+        d = _dt(int(m.group(3)), _MONTH_NUMS[m.group(1).lower()], int(m.group(2)))
+        return (_dt.now() - d).days
+    except ValueError:
+        return None
+
+
 def _narrative_milestone(ctx: str, roster: list[str]) -> str:
     """
     Scan retrieved chunks for a concrete milestone sentence tied to an active player.
@@ -270,6 +295,23 @@ def _narrative_milestone(ctx: str, roster: list[str]) -> str:
             continue
         # Skip markdown/stats headers — not prose
         if _re.search(r'\*\*|#{1,6}\s|^\d+\.|ladder:|stats:|draft pick:', sent, _re.IGNORECASE):
+            continue
+        # Skip stats-table dumps: 3+ consecutive ALL-CAPS words (e.g. "RECORD HOME ROAD OT")
+        if _re.search(r'\b[A-Z]{2,}\b(?:\s+\b[A-Z]{2,}\b){2,}', sent):
+            continue
+        # Skip standings/record rows: 3+ W-L number pairs (e.g. "57-22 31-9 26-13")
+        if len(_re.findall(r'\b\d{1,3}-\d{1,3}\b', sent)) >= 3:
+            continue
+        # Skip article headers: bylines, datelines, timestamps
+        if _re.search(
+            r'\bBy\s+[A-Z][a-z]|\bGame Recap\b|\bAP Sports Writer\b'
+            r'|\b\d{1,2}:\d{2}\s*[AP]M\b|\([A-Z]{2,3}\)\s+[A-Z]',
+            sent,
+        ):
+            continue
+        # Skip stale sentences: date in sentence is older than 10 days
+        age = _sent_age_days(sent)
+        if age is not None and age > 10:
             continue
         # Must have at least 6 words to be a real sentence
         if len(sent.split()) < 6:
@@ -720,7 +762,7 @@ PARAGRAPH 2 — {home_full}:
   - Never write "between X and Y points" — name each individual score.
   - Never write "over/in the last N games" with a point range.
 - CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
-- MILESTONE: if a MILESTONE signal for {home_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph with the specific detail verbatim or close paraphrase.
+- MILESTONE: if a MILESTONE signal for {home_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph. The player name shown in MILESTONE (...) MUST appear explicitly — never as "a player", "a {home_short} player", or any vague team reference. Use the exact player name from the signal.
 - EMERGENCY ROSTER: {home_emergency}
 - Use ONLY players in {home_full}'s AUTHORIZED STATS ROSTER. Any player from {away_full} or any other team appearing in this paragraph is a critical error.
 
@@ -748,7 +790,7 @@ PARAGRAPH 3 — {away_full}:
     bullet explicitly includes a PPG figure (e.g., "Offensive engine: OG Anunoby (26 PPG season)").
     If no PPG appears in the bullet, do not add a season average for that player.
 - CLOSING SENTENCE: the final sentence of this paragraph must contain a player name AND a specific number (stat, score, or percentage). A sentence with only descriptions and no facts is rejected.
-- MILESTONE: if a MILESTONE signal for {away_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph with the specific detail verbatim or close paraphrase.
+- MILESTONE: if a MILESTONE signal for {away_full} is present in PRE-EXTRACTED SIGNALS, include it in this paragraph. The player name shown in MILESTONE (...) MUST appear explicitly — never as "a player", "a {away_short} player", or any vague team reference. Use the exact player name from the signal.
 - EMERGENCY ROSTER: {away_emergency}
 - Use ONLY players from {away_full}'s AUTHORIZED STATS ROSTER. Any player from {home_full} or any other team appearing in this paragraph is a critical error.
 
@@ -759,11 +801,12 @@ ABSOLUTE RULES:
 4. Record format: always "W-L" numerals (e.g., "46-31"). Never write records in words.
 5. Every sentence must contain at least one specific fact: player name, stat, score, or date.
 6. Extraordinary claims (records, franchise milestones, awards) require a MILESTONE signal to be present. Do not invent facts not grounded in the data sections above.
-7. Name players explicitly — never "a veteran" or "a rookie" without a name.
+7. Name players explicitly — never "a veteran", "a rookie", or "a [team] player" without a name. MILESTONE signals always include the player's name — use it.
 8. Zero citations, zero URLs. Pure prose.
 9. PARAGRAPH OWNERSHIP: paragraph 2 = {home_full} only, paragraph 3 = {away_full} only. No cross-team player mentions in these paragraphs.
 10. BANNED PHRASES: reread your output before finalizing. Any sentence with a banned phrase must be rewritten.
 11. NO RAW SOURCE TEXT: do not copy, paste, or quote any headline, article title, link text, or retrieved document fragment into your output. The background context is for your understanding only — it must never appear verbatim in the paragraphs.
+{"12. PLAYOFF CONTEXT: Paragraphs 2 and 3 must NOT reference 'standings', 'conference standings', seed positions, or any regular-season ranking language. Paragraph 1 has already established the stakes context — do not repeat it." if season_phase == "playoffs" else ""}
 
 Write ONLY the 3 paragraphs."""
 

@@ -286,6 +286,30 @@ def fetch_full_active_roster(team_id: str, injured_names: set[str]) -> list[str]
     return active
 
 
+def fetch_prior_playoff_game_count(team_id: str, current_opp_id: str) -> int:
+    """
+    Count completed postseason games for team_id against opponents other than current_opp_id.
+    Returns 0 for first round, 4-7 for conf semis, 8-14 for conf finals.
+    """
+    url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+        f"/teams/{team_id}/schedule?season={ESPN_SEASON_YEAR}&seasontype=3"
+    )
+    try:
+        data = espn_fetch(url)
+    except Exception:
+        return 0
+    count = 0
+    for event in data.get("events", []):
+        comp = event["competitions"][0]
+        if not comp["status"]["type"]["completed"]:
+            continue
+        opp_ids = {c["team"]["id"] for c in comp["competitors"] if c["team"]["id"] != team_id}
+        if current_opp_id not in opp_ids:
+            count += 1
+    return count
+
+
 def fetch_espn_series_debug(t1_id: str, t2_id: str) -> None:
     """
     Debug helper: prints the raw ESPN 'series' field from competitions between

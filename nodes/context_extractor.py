@@ -110,13 +110,16 @@ def context_extractor_node(state: GraphState) -> dict:
         return {"team_narrative_bullets": "[RAG: 0 chunks ingested due to missing API key]"}
 
     total_chunks = 0
+    is_playoff_window = datetime.now().month in {4, 5, 6}
 
     for team_name in [home_full, away_full]:
         print(f"[ContextExtractor]  Searching: {team_name} ...")
 
-        # Focused query: recent performance and season context
-        q1 = f'"{team_name}" NBA 2026 recent games season players performance standings'
-        
+        if is_playoff_window:
+            q1 = f'"{team_name}" NBA 2026 playoffs first round series preview players'
+        else:
+            q1 = f'"{team_name}" NBA 2026 recent games season players performance standings'
+
         try:
             r1 = tavily.search(query=q1, max_results=3,
                                include_domains=["espn.com", "nba.com", "theathletic.com",
@@ -152,7 +155,10 @@ def context_extractor_node(state: GraphState) -> dict:
             combined = _clean(combined)
             if len(combined) < 1500:
                 print(f"[ContextExtractor]  Thin content for {team_name} ({len(combined)} chars) — retrying ...")
-                q_fallback = f"{team_name} NBA 2026 season players games"
+                if is_playoff_window:
+                    q_fallback = f"{team_name} NBA 2026 playoffs series players preview"
+                else:
+                    q_fallback = f"{team_name} NBA 2026 season players games"
                 try:
                     r_fallback = tavily.search(
                         query=q_fallback, max_results=3,

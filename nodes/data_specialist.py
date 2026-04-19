@@ -21,8 +21,6 @@ try:
 except Exception:
     _PLAYOFF_HISTORY = {}
 
-_PLAYOFF_ROUND_LABEL = "first round"   # hardcoded until ESPN series API is confirmed live
-
 from core.state import GraphState, ordinal, extract_teams, parse_home_away, ESPN_TEAMS
 from nodes.utils import fmt_num
 from nodes.espn_client import (
@@ -33,6 +31,7 @@ from nodes.espn_client import (
     fetch_injuries,
     fetch_full_active_roster,
     fetch_recent_form,
+    fetch_prior_playoff_game_count,
 )
 
 
@@ -491,7 +490,7 @@ def _playoff_history_sentence(team_a: str, team_b: str) -> str:
         )
     if wins_a == wins_b:
         return (
-            f"The all-time playoff series is tied {wins_a}-{wins_b}; "
+            f"The playoff series over the last 10 years is tied {wins_a}-{wins_b}; "
             f"they last met in {year} ({round_}), when {winner} won in {games} games."
         )
     # ------------------------------------------------
@@ -499,7 +498,7 @@ def _playoff_history_sentence(team_a: str, team_b: str) -> str:
     lead   = max(wins_a, wins_b)
     trail  = min(wins_a, wins_b)
     return (
-        f"{leader} lead the all-time playoff series {lead}-{trail}; "
+        f"{leader} lead the head-to-head playoff series {lead}-{trail} over the last 10 years; "
         f"they last met in {year} ({round_}), when {winner} won in {games} games."
     )
 
@@ -548,6 +547,9 @@ def _compute_playoff_stakes_context(
     h2h_text: str,
     home_info: dict,
     away_info: dict,
+    home_conf: str,
+    away_conf: str,
+    prior_games: int,
 ) -> str:
     """
     Build a structured playoff stakes context string.
@@ -557,7 +559,17 @@ def _compute_playoff_stakes_context(
     home_wins, away_wins, games_played = _parse_series_from_h2h(h2h_text, home_full, away_full)
     game_number = games_played + 1
 
-    # Determine higher/lower seed
+    # Round label — derived from prior playoff games count and conference
+    if home_conf != away_conf:
+        round_label = "NBA Finals"
+    elif prior_games == 0:
+        round_label = "first round"
+    elif prior_games <= 7:
+        round_label = "second round"
+    else:
+        round_label = "conference finals"
+
+    # Determine higher/lower seed from standings
     if home_seed <= away_seed:
         higher_seed_full, lower_seed_full = home_full, away_full
         higher_seed = home_seed
@@ -567,11 +579,10 @@ def _compute_playoff_stakes_context(
         higher_seed = away_seed
         lower_seed  = home_seed
 
-    # Round label — seed-sum heuristic; hardcoded fallback
-    if home_seed + away_seed == 9:
-        round_label = "first round"
-    else:
-        round_label = _PLAYOFF_ROUND_LABEL
+    # Correct lower seed for first round — standings conf_seed is stale post-play-in
+    # (e.g. a 9-seed that won play-in enters playoffs as the 7-seed but still shows #9)
+    if round_label == "first round":
+        lower_seed = 9 - higher_seed
 
     # Series state
     if home_wins > away_wins:
@@ -659,6 +670,36 @@ def data_specialist_node(state: GraphState) -> dict:
         print(f"[DataSpecialist]    Standings failed: {exc}")
         standings = {}
 
+    # ── Early playoff seed correction (post-play-in, first round only) ──────────
+    # Standings conf_seed is stale after play-in. For first round, the lower seed's
+    # actual playoff position is always 9 - higher_seed regardless of standings.
+    _playoff_seed_override: dict[str, int] = {}  # espn_id -> corrected seed
+    _prior_playoff_games: int = 0
+    if len(teams) == 2:
+        _pe_full0, _, _pe_id0 = teams[0]
+        _pe_full1, _, _pe_id1 = teams[1]
+        _pe_info0 = standings.get(_pe_id0, {})
+        _pe_info1 = standings.get(_pe_id1, {})
+        _pe_gr0 = 82 - _pe_info0.get("wins", 0) - _pe_info0.get("losses", 0)
+        _pe_gr1 = 82 - _pe_info1.get("wins", 0) - _pe_info1.get("losses", 0)
+        _pe_conf0 = _pe_info0.get("conf", "")
+        _pe_conf1 = _pe_info1.get("conf", "")
+        _pe_seed0 = _pe_info0.get("conf_seed", 0)
+        _pe_seed1 = _pe_info1.get("conf_seed", 0)
+        _is_playoffs = (
+            _pe_gr0 <= 0 and _pe_gr1 <= 0
+            and not (_pe_conf0 == _pe_conf1 and 7 <= _pe_seed0 <= 10 and 7 <= _pe_seed1 <= 10)
+        )
+        if _is_playoffs:
+            try:
+                _prior_playoff_games = fetch_prior_playoff_game_count(_pe_id0, _pe_id1)
+                if _prior_playoff_games == 0:  # first round — fix stale lower seed
+                    _higher_s = min(_pe_seed0, _pe_seed1)
+                    _lower_id = _pe_id1 if _pe_seed0 < _pe_seed1 else _pe_id0
+                    _playoff_seed_override[_lower_id] = 9 - _higher_s
+            except Exception:
+                pass
+
     print("[DataSpecialist]    Fetching player stats ...")
     try:
         all_players = build_player_lookup()
@@ -723,7 +764,7 @@ def data_specialist_node(state: GraphState) -> dict:
         info    = standings.get(espn_id, {})
         wins    = info.get("wins", "?")
         losses  = info.get("losses", "?")
-        seed    = info.get("conf_seed", "?")
+        seed    = _playoff_seed_override.get(espn_id, info.get("conf_seed", "?"))
         conf    = info.get("conf", "Conference")
         streak  = info.get("streak", "—")
         l10     = info.get("l10", "—")
@@ -920,17 +961,20 @@ def data_specialist_node(state: GraphState) -> dict:
         elif season_phase == "playoffs":
             from nodes.espn_client import fetch_espn_series_debug
             fetch_espn_series_debug(home_id_s, away_id_s)
-            
+
             playoff_h2h = fetch_h2h_games(home_id_s, away_id_s, home_full_s, away_full_s, postseason_only=True)
 
             stakes_context = _compute_playoff_stakes_context(
-                home_full  = home_full_s,
-                away_full  = away_full_s,
-                home_seed  = home_seed_s,
-                away_seed  = away_seed_s,
-                h2h_text   = playoff_h2h, 
-                home_info  = home_info_s,
-                away_info  = away_info_s,
+                home_full   = home_full_s,
+                away_full   = away_full_s,
+                home_seed   = home_seed_s,
+                away_seed   = away_seed_s,
+                h2h_text    = playoff_h2h,
+                home_info   = home_info_s,
+                away_info   = away_info_s,
+                home_conf   = home_conf_s,
+                away_conf   = away_conf_s,
+                prior_games = _prior_playoff_games,
             )
             
             if "Game: 1\n" in stakes_context:

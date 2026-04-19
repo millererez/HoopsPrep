@@ -161,7 +161,7 @@ CHECK 4 — ATTRIBUTION:
 
 CHECK 5 — H2H IN NARRATIVE:
   PASS if: no paragraph references a regular-season prior meeting or regular-season game result.
-  NOTE: Historical playoff meetings in paragraph 1 (e.g., "all-time playoff series", "last met in 2024", "first playoff meeting") are REQUIRED and ALLOWED. Do NOT flag playoff history.
+  NOTE: Historical playoff meetings in paragraph 1 (e.g., "playoff series (last 10 years)", "last met in 2024", "first playoff meeting") are REQUIRED and ALLOWED. Do NOT flag playoff history.
   ISSUE if: any sentence mentions a specific regular-season game result. Quote it.
 
 CHECK 6 — BANNED PHRASES:
