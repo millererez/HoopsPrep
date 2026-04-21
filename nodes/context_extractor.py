@@ -53,8 +53,9 @@ def _clean(text: str) -> str:
     _SOURCE_ISMS = re.compile(
         r'\b(here at|click here|subscribe|sign up|follow us|read more|'
         r'more on this|earlier this week|last week on|our staff|we asked|'
-        r'you can find|check out|tune in|stay tuned)\b',
-        re.IGNORECASE,
+        r'you can find|check out|tune in|stay tuned)\b'
+        r'|^(this summer|last summer|this offseason|last offseason|in the offseason)',
+        re.IGNORECASE | re.MULTILINE,
     )
     sentences = re.split(r'(?<=[.!?])\s+', text)
     sentences = [s for s in sentences if not _SOURCE_ISMS.search(s)]

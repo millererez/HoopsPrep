@@ -339,7 +339,7 @@ def _narrative_milestone(ctx: str, roster: list[str]) -> str:
 
     if best_sentence and best_score >= 1:
         return (
-            f"MILESTONE ({best_player}): include this specific detail — "
+            f"MILESTONE ({best_player}): reference the key facts from this in your own words — "
             f'"{best_sentence}"'
         )
     return ""
@@ -495,7 +495,22 @@ def _build_playoff_para1_sentences(
                     )
             else:
                 next_city = _team_city(next_host)
-                s2 = f"Game {next_game_num} shifts to {next_city} regardless of tonight's result."
+                lead_m = _re.search(r"(.+?)\s+leads?\s+(\d+)-(\d+)", series_str, _re.IGNORECASE)
+                if lead_m:
+                    leader = lead_m.group(1).strip()
+                    w, l = int(lead_m.group(2)), int(lead_m.group(3))
+                    if leader == home_full:
+                        s2 = (
+                            f"{away_full} look to steal Game {game_number} on the road "
+                            f"before the series shifts to {next_city}."
+                        )
+                    else:
+                        s2 = (
+                            f"{home_full} must respond at home before the series shifts to {next_city}, "
+                            f"or risk falling behind {w}-{l + 1}."
+                        )
+                else:
+                    s2 = f"Game {next_game_num} shifts to {next_city} regardless of tonight's result."
 
     # S3 — playoff history
     s3 = ""

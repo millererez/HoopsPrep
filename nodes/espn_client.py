@@ -16,7 +16,7 @@ from core.state import ESPN_SEASON_YEAR, EST
 _ESPN_STATS_URL = (
     "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
     "/statistics/byathlete?region=us&lang=en&contentorigin=espn"
-    "&sort=offensive.avgPoints%3Adesc&limit=500"
+    "&sort=offensive.avgPoints%3Adesc&limit=500&seasontype=2"
 )
 _MIN_GAMES = 15  # minimum games played to appear in stats table
 _ESPN_STANDINGS_URL = (

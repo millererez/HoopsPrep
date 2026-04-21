@@ -64,7 +64,7 @@ def _analyze_form(
 
     for line in form_lines:
         date_m   = re.search(r'^(\w+ \d+)\s+vs', line)
-        opp_m    = re.search(r'vs ([A-Za-z ]+?) \(', line)
+        opp_m    = re.search(r'vs (.+?) \(', line)
         result_m = re.search(r'\((W|L)\s+\d+-\d+\)', line)
         scorer_m = re.search(r':\s+(.+?)\s+(\d+)\s+pts', line)
         raw_opp = opp_m.group(1) if opp_m else ""
@@ -884,9 +884,9 @@ def data_specialist_node(state: GraphState) -> dict:
             _early_phase = "playoffs"
     # Map espn_id → series opponent full name (used in form analysis)
     _series_opp_by_id: dict[str, str] = {}
-    #if len(teams) == 2 and _early_phase == "playoffs":
-    #    _series_opp_by_id[teams[0][2]] = teams[1][0]
-    #    _series_opp_by_id[teams[1][2]] = teams[0][0]
+    if len(teams) == 2 and _early_phase == "playoffs":
+        _series_opp_by_id[teams[0][2]] = teams[1][0]
+        _series_opp_by_id[teams[1][2]] = teams[0][0]
 
     # ── Fetch recent form (last 5 games, OUT players excluded) ──────────────
     form_parts = []

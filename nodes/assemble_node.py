@@ -110,7 +110,7 @@ def _series_so_far_table(h2h_raw: str, home_full: str, away_full: str) -> str:
         header_leader = f"Series tied {home_wins}-{away_wins}"
 
     table_lines = [
-        f"Series So Far — {header_leader}:",
+        f"{header_leader}:",
         "",
         "| Game | Date | Winner | Score | Location |",
         "|------|------|--------|-------|----------|",
