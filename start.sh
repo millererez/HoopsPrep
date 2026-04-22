@@ -23,9 +23,35 @@ else
     
     DB_PATH=${CACHE_DB_PATH:-"/data/cache.db"}
     
-    if [ -f "$DB_PATH" ]; then
-        sqlite3 "$DB_PATH" "DELETE FROM report_cache;"
-        echo "[Boot] Cache cleared successfully via sqlite3."
+if [ -f "$DB_PATH" ]; then
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        SUCCESS=false
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            ((RETRY_COUNT++))
+            echo "[Boot] Attempting to clear cache (Attempt $RETRY_COUNT/$MAX_RETRIES)..."
+            
+            # Try to delete. We use .timeout 2000 inside for extra safety.
+            SQL_OUTPUT=$(sqlite3 "$DB_PATH" ".timeout 2000" "DELETE FROM report_cache; SELECT changes();" 2>&1)
+            EXIT_CODE=$?
+
+            if [ $EXIT_CODE -eq 0 ]; then
+                echo "[Boot] SUCCESS: Cache cleared ($SQL_OUTPUT rows deleted)."
+                SUCCESS=true
+                break
+            else
+                echo "[Boot] Attempt $RETRY_COUNT failed: $SQL_OUTPUT"
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                    echo "[Boot] Waiting 2 seconds before next attempt..."
+                    sleep 2
+                fi
+            fi
+        done
+
+        if [ "$SUCCESS" = false ]; then
+            echo "[Boot] FATAL: Could not clear cache after $MAX_RETRIES attempts. Moving on with existing cache."
+        fi
     else
         echo "[Boot] Database file not found at $DB_PATH — nothing to clear yet."
     fi
