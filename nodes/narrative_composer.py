@@ -507,7 +507,7 @@ def _build_playoff_para1_sentences(
                     else:
                         s2 = (
                             f"{home_full} must respond at home before the series shifts to {next_city}, "
-                            f"or risk falling behind {w}-{l + 1}."
+                            f"or risk falling behind {w + 1}-{l}."
                         )
                 else:
                     s2 = f"Game {next_game_num} shifts to {next_city} regardless of tonight's result."
