@@ -496,20 +496,20 @@ def _build_playoff_para1_sentences(
             else:
                 next_city = _team_city(next_host)
                 lead_m = _re.search(r"(.+?)\s+leads?\s+(\d+)-(\d+)", series_str, _re.IGNORECASE)
-                print(f"[DEBUG-SERIES] series_str is: '{series_str}'") # <--- הוספנו לוג
+                print(f"[DEBUG-SERIES] series_str is: '{series_str}'")
                 
                 if lead_m:
                     leader = lead_m.group(1).strip()
                     val1 = int(lead_m.group(2))
                     val2 = int(lead_m.group(3))
                     
-                    print(f"[DEBUG-SERIES] Regex found: leader={leader}, val1={val1}, val2={val2}") # <--- הוספנו לוג
+                    print(f"[DEBUG-SERIES] Regex found: leader={leader}, val1={val1}, val2={val2}") 
                     
                     # Ensure 'w' is the actual wins of the leader (the higher number)
                     w = max(val1, val2)
                     l = min(val1, val2)
                     
-                    print(f"[DEBUG-SERIES] After max/min: w={w}, l={l}") # <--- הוספנו לוג
+                    print(f"[DEBUG-SERIES] After max/min: w={w}, l={l}") 
                     
                     if leader == home_full:
                         s2 = (
