@@ -498,7 +498,13 @@ def _build_playoff_para1_sentences(
                 lead_m = _re.search(r"(.+?)\s+leads?\s+(\d+)-(\d+)", series_str, _re.IGNORECASE)
                 if lead_m:
                     leader = lead_m.group(1).strip()
-                    w, l = int(lead_m.group(2)), int(lead_m.group(3))
+                    val1 = int(lead_m.group(2))
+                    val2 = int(lead_m.group(3))
+                    
+                    # Ensure 'w' is the actual wins of the leader (the higher number)
+                    w = max(val1, val2)
+                    l = min(val1, val2)
+                    
                     if leader == home_full:
                         s2 = (
                             f"{away_full} look to steal Game {game_number} on the road "
