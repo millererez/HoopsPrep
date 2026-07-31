@@ -8,7 +8,9 @@ By quickly synthesizing raw ESPN statistics and dynamic web narratives into an e
 
 Rather than acting as a simple API wrapper, HoopsPrep leverages an **Agentic AI Architecture** to autonomously fetch real-time data, perform dynamic Retrieval-Augmented Generation (RAG), and evaluate its own output before presenting it to the user.
 
-## Try it Live: [hoopsprep.onrender.com](https://hoopsprep.onrender.com/)
+## Project status: Archived
+HoopsPrep was successfully deployed and actively used during the end of the NBA Regular Season, Play-In, and Playoffs.
+The live web environment has now been spun down. Please refer to the full demo video below to see the system in action.
 
 ## Demo
 
@@ -64,7 +66,7 @@ START
 
 * **DevOps:** Docker, Docker Compose, Render(Cloud Deployment)
 
-## Running Locally (For Developers)
+## Running Locally / For Developers (Archived)
 ### Prerequisites
 
 - Docker  
